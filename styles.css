@@ -1,0 +1,59 @@
+/* SALVE COMO `styles.css` na mesma pasta do index.html */
+:root{
+  /* Paleta base (Bioma 0 – Cripta) */
+  --bg:#0b0f1a; --floor:#121826; --wall:#2d3a53; --player:#ffcc00;
+  --ui:#e0e6ff; --accent:#7cf5ff; --enemy:#ff5a7d; --door:#9ef0ff;
+  --boss1:#ff6a88; --boss2:#b28cff; --boss3:#4b5563;
+  --tear:#7cc7ff; --danger:#ff3b3b; --coin:#ffd84d; --heart:#ff518a;
+  --rar-comum:#9aa4b2; --rar-raro:#4dd4ff; --rar-lend:#ffcc4d; --rar-mit:#ff5bd6;
+}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ui);font-family:system-ui,Segoe UI,Arial,sans-serif;}
+.wrap{display:grid;place-items:center;height:100%;gap:10px;padding:10px}
+#game{background:var(--floor);border:4px solid var(--wall);border-radius:16px;image-rendering:pixelated;touch-action:none}
+.hint{font-size:14px;opacity:.9;text-align:center}
+.kbd{padding:2px 6px;border:1px solid #445;border-radius:6px;background:#101521;color:#cfe}
+
+.overlay{position:fixed;inset:0;display:none;place-items:center;background:rgba(2,6,14,.78);backdrop-filter:blur(2px);z-index:3}
+.overlay.show{display:grid}
+
+/* TELA DE INÍCIO */
+#startOverlay{background:linear-gradient(180deg, rgba(12,18,33,.88), rgba(6,10,20,.92));}
+.start-card{position:relative; width:min(900px,92vw); border:2px solid #2f415f; border-radius:18px; padding:22px; background:#0f1629cc; box-shadow:0 20px 60px rgba(0,0,0,.45); overflow:hidden}
+.start-bg{ position:absolute; inset:-20%; filter:blur(40px); z-index:-1; opacity:.55;
+  background: radial-gradient(800px 420px at 20% 30%, #284a92 0%, transparent 60%),
+             radial-gradient(620px 360px at 80% 40%, #6b2d7d 0%, transparent 60%),
+             radial-gradient(520px 320px at 40% 85%, #0aa2b3 0%, transparent 60%);
+  animation: floaty 12s ease-in-out infinite alternate; }
+@keyframes floaty{ from{transform:translateY(-12px)} to{transform:translateY(12px)} }
+.title{display:flex;align-items:center;gap:14px; margin:4px 0 6px; font-weight:900; letter-spacing:1px;}
+.title .logo{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;
+  background:conic-gradient(from 200deg,#ffd84d,#ff6a88,#4dd4ff,#ffd84d); color:#121826; font-size:22px; box-shadow:0 6px 20px rgba(0,0,0,.35)}
+.title h1{font-size:28px; margin:0}
+.subtitle{opacity:.9; margin:0 0 14px}
+.grid-start{display:grid;grid-template-columns:1.1fr .9fr; gap:16px}
+.panel{border:1px solid #2f415f;border-radius:14px;padding:14px;background:#0b1326}
+.btn{display:inline-flex;align-items:center;gap:10px;border:2px solid #2f415f;background:#132040;color:#e8f1ff;
+     padding:12px 16px;border-radius:12px;font-weight:700;cursor:pointer;transition:.15s transform, .15s background}
+.btn:hover{transform:translateY(-1px); background:#16264a}
+.btn:active{transform:translateY(0)}
+.btn .dot{width:10px;height:10px;border-radius:50%;background:#7cf5ff; box-shadow:0 0 12px #7cf5ffaa}
+.opt{display:flex;align-items:center;gap:10px;margin:8px 0}
+.radio{display:flex;gap:8px;align-items:center}
+.radio input{accent-color:#7cf5ff}
+.muted{opacity:.85;font-size:13px}
+
+.cards{ display:grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap:16px; padding:16px; }
+.card{ background:#0f1629; border:2px solid #304269; border-radius:14px; padding:14px; width:260px;
+       box-shadow:0 8px 30px rgba(0,0,0,.35); cursor:pointer; }
+.card:hover{ transform:translateY(-2px); }
+.title-card{ font-weight:700; margin:0 0 6px 0; }
+.desc{ margin:0 0 6px 0; color:#cfe; font-size:14px; }
+.tag{ font-size:12px; opacity:.9; }
+
+#helpOverlay .box{max-width:860px; max-height:70vh; overflow:auto; padding:16px; border-radius:16px; background:#0f1629; border:2px solid #304269;}
+.grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px;}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;margin-left:6px}
+
+.touch{position:fixed;inset:auto 12px 12px 12px;display:flex;justify-content:space-between;pointer-events:none}
+.pad,.btnA{pointer-events:auto;width:84px;height:84px;border-radius:50%;background:#1a2436aa;border:2px solid #3c4c6e;display:grid;place-items:center;color:#cfe;user-select:none;touch-action:none}
+@media (min-width: 900px){ .touch{display:none} }
