@@ -188,7 +188,20 @@ const SKINS = [
   { id:'sky',     name:'Céu',           color:'#7cd9ff', price: 600 },
   { id:'honey',   name:'Honey',         color:'#ffcb4c', price: 800 },
   { id:'neon',    name:'Neon (Rastro)', color:'#7cf5ff', price:12000,
-  fx:{ glow:true, trail:{ life:0.55, spacing:0.06, max:24, radius:18 } } }
+  fx:{ glow:true, trail:{ life:0.5, spacing:0.02, max:32, radius:18 } } },
+  { id:'shiny', name:'Purple Bubble (Partículas)', color:'#df24d5ff', price:13000,
+  fx:{
+    glow:true,
+    shiny:{
+      rate:20,                 // partículas por segundo aproximadamente
+      life:[0.45, 0.9],        // vida (s) min..max
+      speed:[40, 90],          // velocidade radial
+      radius:[8, 36],          // onde nascem em torno do centro do player
+      size:[2, 4],             // tamanho do “pingo”
+      max:80                   // limite total (cap) pra performance
+    }
+  }
+}
 ];
 
 
@@ -665,17 +678,22 @@ function getSavedSkinId(){ return localStorage.getItem('skinId') || 'classic'; }
 
 function applySkinById(id){
   const skin = SKINS.find(k=>k.id===id) || SKINS[0];
-  const chosen = isSkinUnlocked?.(skin.id) || skin.price===0 ? skin : SKINS.find(k=>k.id==='classic');
+  const chosen = (typeof isSkinUnlocked==='function' ? isSkinUnlocked(skin.id) : true) || skin.price===0
+    ? skin : SKINS.find(k=>k.id==='classic');
 
   Game.player.skinId = chosen.id;
   Game.player.color  = chosen.color;
 
-  // 🔹 NOVO: configura FX da skin (glow/trail)
+  // FX configurável por skin
   Game.player.fx = chosen.fx || null;
-  Game.player._trail = [];        // buffer do rastro
-  Game.player._trailTimer = 0;    // espaçamento temporal
-}
 
+  // buffers/temporizadores dos efeitos
+  Game.player._trail = [];           // se houver trail
+  Game.player._trailTimer = 0;
+
+  Game.player._shiny = [];           // ← NOVO: partículas shiny
+  Game.player._shinyAcc = 0;         // acumulador p/ taxa
+}
 function applySavedSkin(){
   const id = localStorage.getItem('skinId') || 'classic';
   applySkinById(id);
@@ -990,7 +1008,7 @@ function update(dt){
 
   // 🔹 NOVO: rastro da skin (se houver)
   if (Game.player.fx?.trail) updatePlayerTrail(dt);
-
+  if (Game.player.fx?.shiny) updatePlayerShiny(dt); 
   if(p.inv>0) p.inv=Math.max(0,p.inv-dt); if(p.hurtFlash>0) p.hurtFlash=Math.max(0,p.hurtFlash-dt);
 
   if(p.shield < p.shieldMax){ p.shieldRegenTimer+=dt; if(p.shieldRegenTimer>=p.shieldRegenTime){ p.shield++; p.shieldRegenTimer=0; Sfx.shield(); spawnBurst(p.x+p.w/2,p.y-6,10,get('--accent')); } }
@@ -1459,7 +1477,7 @@ function draw(){
 
   // 🔹 NOVO: desenha rastro da skin (fica por baixo do player)
   drawPlayerTrail(ctx);
-
+  drawPlayerShiny(ctx);
   const p=Game.player; const flashing=(p.inv>0)&&Math.floor(Game.time*20)%2===0;
   if(!flashing){ 
     ctx.save();
@@ -1609,6 +1627,71 @@ function rgba(hex, a){
     : hex.slice(1);
   const r = parseInt(n.slice(0,2),16), g = parseInt(n.slice(2,4),16), b = parseInt(n.slice(4,6),16);
   return `rgba(${r},${g},${b},${a})`;
+}
+
+// Atualiza o efeito “shiny” (spawns + vida)
+function updatePlayerShiny(dt){
+  const p = Game.player, fx = p.fx?.shiny; if (!fx) return;
+
+  // spawn conforme rate
+  p._shinyAcc += dt * fx.rate;
+  while (p._shinyAcc >= 1) {
+    p._shinyAcc -= 1;
+
+    // parâmetros aleatórios dentro dos ranges
+    const life = fx.life[0] + Math.random()*(fx.life[1]-fx.life[0]);
+    const spd  = fx.speed[0] + Math.random()*(fx.speed[1]-fx.speed[0]);
+    const rad0 = fx.radius[0] + Math.random()*(fx.radius[1]-fx.radius[0]);
+    const ang  = Math.random()*Math.PI*2;
+    const sz   = fx.size[0] + Math.random()*(fx.size[1]-fx.size[0]);
+
+    // nasce em um anel ao redor do player e “explode” levemente
+    const cx = p.x + p.w/2, cy = p.y + p.h/2;
+    const sx = cx + Math.cos(ang)*rad0;
+    const sy = cy + Math.sin(ang)*rad0;
+    const vx = Math.cos(ang)*spd;
+    const vy = Math.sin(ang)*spd;
+
+    p._shiny.push({ x:sx, y:sy, vx, vy, life, max:life, sz });
+  }
+
+  // cap de performance
+  const cap = fx.max ?? 80;
+  if (p._shiny.length > cap) p._shiny.splice(0, p._shiny.length - cap);
+
+  // integrar movimento/vida
+  for (let i=p._shiny.length-1; i>=0; i--){
+    const s = p._shiny[i];
+    s.life -= dt;
+    if (s.life <= 0) { p._shiny.splice(i,1); continue; }
+    const t = s.life / s.max; // 0..1
+    // leve desaceleração no fim (fade-out)
+    s.vx *= 0.985; s.vy *= 0.985;
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    // oscilar sutilmente
+    s.y += Math.sin((1-t)*8) * 4 * dt;
+  }
+}
+
+// Desenha as partículas (aditivo), sob e/ou sobre o player
+function drawPlayerShiny(ctx){
+  const p = Game.player, fx = p.fx?.shiny; if (!fx || !p._shiny?.length) return;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter'; // somar luz
+  for (const s of p._shiny){
+    const t = Math.max(0, s.life / s.max);      // 0..1
+    const alpha = 0.55 * t + 0.15;              // brilha mais no começo
+    const r = s.sz * (1 + (1-t)*0.8);           // cresce um tiquinho ao sumir
+    const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, r*2.2);
+    g.addColorStop(0.0, rgba(p.color, alpha));
+    g.addColorStop(0.35, rgba(p.color, alpha*0.65));
+    g.addColorStop(1.0, rgba(p.color, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(s.x, s.y, r*2.2, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
 }
 
 // atualiza a “fila” de rastros do player
