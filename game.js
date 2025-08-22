@@ -181,12 +181,14 @@ const Game={
 function rand(){ Game.rngSeed = (Game.rngSeed*1664525 + 1013904223) >>> 0; return Game.rngSeed/0xffffffff; }
 
 const SKINS = [
-  { id:'classic', name:'Clássica', color:'#ffd34d' },
-  { id:'jade',    name:'Jade',     color:'#6ef7b0' },
-  { id:'violet',  name:'Violeta',  color:'#c79aff' },
-  { id:'crimson', name:'Carmesim', color:'#ff6b6b' },
-  { id:'sky',     name:'Céu',      color:'#7cd9ff' },
-  { id:'honey',   name:'Honey',    color:'#ffcb4c' } 
+  { id:'classic', name:'Clássica',      color:'#ffd34d', price: 0 },
+  { id:'jade',    name:'Jade',          color:'#6ef7b0', price: 500 },
+  { id:'violet',  name:'Violeta',       color:'#c79aff', price: 600 },
+  { id:'crimson', name:'Carmesim',      color:'#ff6b6b', price: 750 },
+  { id:'sky',     name:'Céu',           color:'#7cd9ff', price: 600 },
+  { id:'honey',   name:'Honey',         color:'#ffcb4c', price: 800 },
+  { id:'neon',    name:'Neon (Rastro)', color:'#7cf5ff', price:12000,
+  fx:{ glow:true, trail:{ life:0.55, spacing:0.06, max:24, radius:18 } } }
 ];
 
 
@@ -662,12 +664,56 @@ function openDoorGap(){
 function getSavedSkinId(){ return localStorage.getItem('skinId') || 'classic'; }
 
 function applySkinById(id){
-  const s = SKINS.find(k=>k.id===id) || SKINS[0];
-  Game.player.skinId = s.id;
-  Game.player.color  = s.color;       // draw() já usa p.color → sem quebrar nada
+  const skin = SKINS.find(k=>k.id===id) || SKINS[0];
+  const chosen = isSkinUnlocked?.(skin.id) || skin.price===0 ? skin : SKINS.find(k=>k.id==='classic');
+
+  Game.player.skinId = chosen.id;
+  Game.player.color  = chosen.color;
+
+  // 🔹 NOVO: configura FX da skin (glow/trail)
+  Game.player.fx = chosen.fx || null;
+  Game.player._trail = [];        // buffer do rastro
+  Game.player._trailTimer = 0;    // espaçamento temporal
 }
 
-function applySavedSkin(){ applySkinById(getSavedSkinId()); }
+function applySavedSkin(){
+  const id = localStorage.getItem('skinId') || 'classic';
+  applySkinById(id);
+}
+
+const COIN_KEY = 'coins';
+const SKIN_UNLOCK_KEY = 'skinUnlocked'; // JSON array de ids
+const STARTER_COINS = 50; // presente inicial (1ª execução)
+
+function getCoins(){ const v = +localStorage.getItem(COIN_KEY); return Number.isFinite(v) ? v : 0; }
+function setCoins(n){ localStorage.setItem(COIN_KEY, Math.max(0, Math.floor(n))); updateWalletUI?.(); }
+function addCoins(n){ setCoins(getCoins() + Math.floor(n)); }
+
+function getUnlockedSet(){
+  try { const arr = JSON.parse(localStorage.getItem(SKIN_UNLOCK_KEY) || '[]'); return new Set(arr); }
+  catch { return new Set(); }
+}
+function saveUnlockedSet(set){
+  localStorage.setItem(SKIN_UNLOCK_KEY, JSON.stringify(Array.from(set)));
+}
+function isSkinUnlocked(id){ return getUnlockedSet().has(id); }
+function unlockSkin(id){ const s = getUnlockedSet(); s.add(id); saveUnlockedSet(s); }
+
+function ensureDefaultUnlocks(){
+  // presente inicial (apenas se ainda não há coins)
+  if (localStorage.getItem(COIN_KEY) === null) setCoins(STARTER_COINS);
+  // garante 'classic' desbloqueada
+  const s = getUnlockedSet(); if (!s.has('classic')) { s.add('classic'); saveUnlockedSet(s); }
+  // garante skin ativa válida
+  const cur = localStorage.getItem('skinId') || 'classic';
+  if (!isSkinUnlocked(cur)) localStorage.setItem('skinId', 'classic');
+}
+
+function updateWalletUI(){
+  const span = document.getElementById('coinCount');
+  if (span) span.textContent = getCoins();
+}
+
 
 
 /* ---------- Perks / Ajuda ---------- */
@@ -939,7 +985,12 @@ function update(dt){
 
   const mv = isFrozen ? {x:0, y:0} : getMoveVec();
   p.vx = mv.x * p.speed; p.vy = mv.y * p.speed;
-  p.x+=p.vx*dt; collideWithWalls(p,'x'); p.y+=p.vy*dt; collideWithWalls(p,'y');
+  p.x+=p.vx*dt; collideWithWalls(p,'x'); 
+  p.y+=p.vy*dt; collideWithWalls(p,'y');
+
+  // 🔹 NOVO: rastro da skin (se houver)
+  if (Game.player.fx?.trail) updatePlayerTrail(dt);
+
   if(p.inv>0) p.inv=Math.max(0,p.inv-dt); if(p.hurtFlash>0) p.hurtFlash=Math.max(0,p.hurtFlash-dt);
 
   if(p.shield < p.shieldMax){ p.shieldRegenTimer+=dt; if(p.shieldRegenTimer>=p.shieldRegenTime){ p.shield++; p.shieldRegenTimer=0; Sfx.shield(); spawnBurst(p.x+p.w/2,p.y-6,10,get('--accent')); } }
@@ -1095,7 +1146,18 @@ function update(dt){
   for(let i=Game.pickups.length-1;i>=0;i--){
     const it=Game.pickups[i]; it.vy=clamp((it.vy||0)+300*dt,-300,300);
     it.y+=it.vy*dt; if(it.y+it.h > r.y+r.h-30){ it.y=r.y+r.h-30-it.h; it.vy=0; }
-    if(aabb(p.x,p.y,p.w,p.h,it.x,it.y,it.w,it.h)){ collect(it.type); Game.pickups.splice(i,1); }
+    if (aabb(p.x,p.y,p.w,p.h, it.x,it.y,it.w,it.h)) {
+      if (it.type === 'coin') {
+        if (!it._claimed) {
+          it._claimed = true;
+          collect('coin', it);
+        }
+        Game.pickups.splice(i,1);
+      } else {
+        collect(it.type, it);
+        Game.pickups.splice(i,1);
+      }
+    }
   }
 
   if(!r.isBoss){
@@ -1304,7 +1366,35 @@ function shoot(dx,dy){
     });
   }
 }
-function collect(type){ const p=Game.player; if(type==='coin'){p.score+=1;if(Sfx.enabled)Sfx.coin();} if(type==='heart'){heal(2);} }
+function collect(type){
+  const p = Game.player;
+
+  if (type === 'coin') {
+    // score da run
+    p.score += 1;
+
+    // ✅ persiste imediatamente (não perde com F5 nem ao morrer)
+    if (typeof addCoins === 'function') {
+      addCoins(1);
+    } else {
+      // fallback se ainda não colou os helpers
+      const key = 'coins';
+      const cur = (+localStorage.getItem(key) || 0);
+      localStorage.setItem(key, cur + 1);
+    }
+
+    if (Sfx.enabled && Sfx.coin) Sfx.coin();
+    updateWalletUI?.(); // atualiza carteira no menu, se visível
+    return;
+  }
+
+  if (type === 'heart') {
+    heal(2);
+    return;
+  }
+}
+
+
 function heal(a){ const p=Game.player; p.hp=clamp(p.hp+a,0,p.hpMax); if(Sfx.enabled) Sfx.heart(); }
 function damagePlayerFrom(e){
   const p=Game.player;
@@ -1367,8 +1457,30 @@ function draw(){
 
   for(const a of Game.particles){ const k=Math.max(0,Math.min(1,a.life)); const al=a.alpha || (0.9*k); ctx.globalAlpha=al; ctx.fillStyle=a.color; ctx.fillRect(a.x-a.size/2,a.y-a.size/2,a.size,a.size); ctx.globalAlpha=1; }
 
+  // 🔹 NOVO: desenha rastro da skin (fica por baixo do player)
+  drawPlayerTrail(ctx);
+
   const p=Game.player; const flashing=(p.inv>0)&&Math.floor(Game.time*20)%2===0;
-  if(!flashing){ ctx.save(); if(p.shield>0){ ctx.shadowColor=get('--accent'); ctx.shadowBlur=16+4*Math.sin(Game.time*6); } if(p.hurtFlash>0){ ctx.shadowColor=get('--danger'); ctx.shadowBlur=18; } ctx.fillStyle=p.color; roundRect(ctx,p.x,p.y,p.w,p.h,6); ctx.fill(); ctx.restore(); }
+  if(!flashing){ 
+    ctx.save();
+    
+    if (p.fx?.glow) {
+      // brilho extra (mantém seu shield/hurtFlash se ativos)
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur  = Math.max(ctx.shadowBlur||0, 28 + 8*Math.sin(Game.time*6));
+    }
+
+    if(p.shield>0){ 
+      ctx.shadowColor=get('--accent'); 
+      ctx.shadowBlur=16+4*Math.sin(Game.time*6); 
+    } 
+    if(p.hurtFlash>0){ ctx.shadowColor=get('--danger'); ctx.shadowBlur=18; } 
+    ctx.fillStyle=p.color; 
+    roundRect(ctx,p.x,p.y,p.w,p.h,6); 
+    ctx.fill(); 
+    ctx.restore(); 
+    
+  }
 
   // 🔷 NOVO: aura azul quando congelado
   if (Game.player.frozenTime > 0) {
@@ -1393,7 +1505,7 @@ function draw(){
   drawHUD();
 
   if(Game.paused && !Game.over && !Game.choosingPerk) drawCenterText("⏸ Pausado (P)");
-  if(Game.over) drawCenterText("💀 Game Over\nPressione R para reiniciar");
+  if(Game.over) drawCenterText("💀 Game Over\nPressione R para voltar ao menu");
 }
 function drawMenu(){
   const ctx=Game.ctx;
@@ -1415,7 +1527,13 @@ function drawHUD(){
   const ctx=Game.ctx, p=Game.player;
   ctx.fillStyle=get('--ui'); ctx.font="16px system-ui";
   const lvl=Game.room.isBoss? `${Game.level} (BOSS)` : Game.level;
-  ctx.fillText(`andar ${lvl}  •  t=${(Math.round(Game.time*10)/10).toFixed(1)}s  •  pontos=${p.score}  •  HP:${p.hp}/${p.hpMax}`,16,24);
+  const coins = (typeof getCoins==='function') ? getCoins() : (+localStorage.getItem('coins')||0);
+  const hudText = `andar ${lvl}  •  t=${(Math.round(Game.time*10)/10).toFixed(1)}s  •  pontos=${p.score}  •  HP:${p.hp}/${p.hpMax}`;
+  ctx.fillText(hudText, 16, 24);
+  const w = ctx.measureText(hudText).width;
+  drawCoinIcon(ctx, 16 + w + 18, 20);           // ícone
+  ctx.fillText(`x ${coins}`, 16 + w + 36, 24);   // quantidade
+    
   const hearts=Math.ceil(p.hpMax/2), x0=16,y0=40,s=16,gap=6; for(let i=0;i<hearts;i++) drawHeart(x0+i*(s+gap),y0,s, Math.max(0,Math.min(2,p.hp - i*2)));
   if(p.shieldMax>0){ ctx.fillStyle=get('--accent'); ctx.font="14px system-ui"; ctx.fillText(`🛡️ ${p.shield}/${p.shieldMax}`, 16, 66); }
   const b=currentBiome(); ctx.textAlign='right'; ctx.fillStyle=get('--ui'); ctx.fillText(`bioma: ${b.name}`, Game.w-16, 24); ctx.textAlign='left';
@@ -1473,6 +1591,67 @@ function drawStalactite(ctx, b) {
 
   ctx.restore();
 }
+
+function drawCoinIcon(ctx, x, y, s=1){
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(s, s);
+  ctx.fillStyle = '#ffd34d'; ctx.beginPath(); ctx.arc(0, 0, 7, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#e7a800'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.beginPath(); ctx.arc(-2, -3, 3, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+// cor #rrggbb → rgba()
+function rgba(hex, a){
+  if (!hex || hex[0] !== '#') return hex;
+  const n = hex.length === 4
+    ? hex.replace(/./g,(c,i)=> i? c+c : '#').slice(1)
+    : hex.slice(1);
+  const r = parseInt(n.slice(0,2),16), g = parseInt(n.slice(2,4),16), b = parseInt(n.slice(4,6),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// atualiza a “fila” de rastros do player
+function updatePlayerTrail(dt){
+  const p = Game.player;
+  const fx = p.fx?.trail; if (!fx) return;
+
+  p._trailTimer -= dt;
+  const speed = Math.hypot(p.vx, p.vy);
+
+  // adiciona um “pingo” de rastro se estiver se movendo
+  if (speed > 40 && p._trailTimer <= 0){
+    p._trailTimer = fx.spacing;
+    p._trail.push({ x: p.x + p.w/2, y: p.y + p.h/2, life: fx.life, max: fx.life });
+    if (p._trail.length > fx.max) p._trail.shift();
+  }
+
+  // decai
+  for (let i = p._trail.length-1; i >= 0; i--){
+    const s = p._trail[i]; s.life -= dt;
+    if (s.life <= 0) p._trail.splice(i,1);
+  }
+}
+
+// desenha o rastro (glow suave em “bolhas” com gradiente)
+function drawPlayerTrail(ctx){
+  const p = Game.player, fx = p.fx?.trail; if (!fx || !p._trail?.length) return;
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter'; // somar luz
+  for (const s of p._trail){
+    const t = Math.max(0, s.life / s.max);           // 0..1
+    const rad = fx.radius * (1 + (1 - t) * 0.6);     // cresce um pouco ao sumir
+    const g = ctx.createRadialGradient(s.x, s.y, rad*0.1, s.x, s.y, rad);
+    g.addColorStop(0, rgba(p.color, 0.45 * t));
+    g.addColorStop(1, rgba(p.color, 0.00));
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(s.x, s.y, rad, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+
 
 /* ---------- Partículas / helpers ---------- */
 function spawnBurst(x,y,n,color){ for(let i=0;i<n;i++){ const a=Math.random()*Math.PI*2, sp=60+Math.random()*140; Game.particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:0.4+Math.random()*0.3,size:2+Math.random()*2,color,drag:0.92,g:40}); } }
@@ -1546,11 +1725,30 @@ function resetIfOver(){ if(!Game.over) return; Game.state='menu'; showStart(); }
     }
 
     // 🔁 reiniciar (sempre)
+    // if (k === 'r') {
+    //   e.stopPropagation();              // <<< idem
+    //   startGame();
+    //   return;
+    // }
+
+    // 🔁 Reiniciar / Voltar ao menu
     if (k === 'r') {
-      e.stopPropagation();              // <<< idem
-      startGame();
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (Game.over) {
+        // morto → volta ao menu para poder gastar moedas
+        enterMenu();
+      } else if (Game.state !== 'play') {
+        // se já está no menu/pausado, garantir ida ao menu
+        enterMenu();
+      } else {
+        // em jogo vivo → seu restart normal
+        startGame();
+      }
       return;
     }
+
 
     // escolha de perk
     if (Game.choosingPerk && ['1','2','3'].includes(k)) {
@@ -1586,11 +1784,46 @@ function resetIfOver(){ if(!Game.over) return; Game.state='menu'; showStart(); }
 
   applySavedSkin();
 
+  updateWalletUI();
+
   function fit(){ const mar=20, W=Math.max(320,innerWidth-mar), H=Math.max(240,innerHeight-mar-80), s=Math.min(W/Game.w,H/Game.h); c.style.width=(Game.w*s)+'px'; c.style.height=(Game.h*s)+'px'; }
   addEventListener('resize',fit); fit();
 
   last=performance.now(); requestAnimationFrame(loop);
 })();
+
+/* ---------- Menu Start helpers ---------- */
+
+function enterMenu(){
+  Game.state = 'menu';
+  Game.paused = false;
+  Game.over = false;
+  Game.choosingPerk = false;
+
+  // limpa resíduos visuais/entidades
+  Game.enemies.length = 0;
+  Game.tears.length = 0;
+  Game.bossBullets.length = 0;
+  Game.particles.length = 0;
+  Game.boss = null;
+  Game.spawnTimer = 0;
+
+  // player centralizado para preview (opcional)
+  Game.player.vx = Game.player.vy = 0;
+  Game.player.x = Game.w/2 - Game.player.w/2;
+  Game.player.y = Game.h/2 - Game.player.h/2;
+
+  // aplica skin e atualiza carteira
+  applySavedSkin?.();
+  updateWalletUI?.();
+
+  // música do menu, se existir
+  Bgm?.play?.('menu');
+
+  // se houver overlay de loja/menu, garanta estado visível/fechado conforme sua UI
+  document.getElementById('shopOverlay')?.classList.add('hidden');
+}
+
 
 /* ---------- UI Start helpers ---------- */
 function setupStartUI(){
@@ -1649,46 +1882,102 @@ function setupShopUI(){
   const btnSkins = document.getElementById('btnSkins');
   const btnClose = document.getElementById('btnCloseShop');
 
-  if (!grid || !ov || !btnSkins) return; // não existe no DOM? ignora
+  if (!grid || !ov || !btnSkins) return;
 
-  let selected = getSavedSkinId();
+  ensureDefaultUnlocks();
+  updateWalletUI();
 
-  const render = ()=>{
+  let selected = localStorage.getItem('skinId') || 'classic';
+
+  function render(){
     grid.innerHTML = '';
+    const unlocked = getUnlockedSet();
     for (const s of SKINS){
-      const item = document.createElement('button');
-      item.className = 'skin-item' + (s.id===selected ? ' selected':'');
-      item.setAttribute('data-id', s.id);
+      const li = document.createElement('button');
+      const isUnlocked = unlocked.has(s.id) || s.price === 0;
+      if (s.price === 0) unlocked.add(s.id), saveUnlockedSet(unlocked);
+
+      li.className = 'skin-item' + (s.id===selected ? ' selected' : '') + (isUnlocked ? '' : ' locked');
+      li.setAttribute('data-id', s.id);
 
       const sw = document.createElement('div');
       sw.className = 'skin-swatch'; sw.style.background = s.color;
 
       const nm = document.createElement('div');
-      nm.className = 'skin-name'; nm.textContent = s.name;
+      nm.className = 'skin-name'; nm.textContent = `${s.name}`;
 
-      item.appendChild(sw); item.appendChild(nm);
-      item.addEventListener('click', ()=>{
+      const price = document.createElement('div');
+      price.className = 'price-badge';
+      price.textContent = isUnlocked ? '✔' : `🪙 ${s.price}`;
+
+      li.appendChild(sw); li.appendChild(nm); li.appendChild(price);
+
+      li.addEventListener('click', ()=>{
         selected = s.id;
         document.querySelectorAll('.skin-item').forEach(el=>el.classList.remove('selected'));
-        item.classList.add('selected');
+        li.classList.add('selected');
+        updateUseButton();
       });
 
-      grid.appendChild(item);
+      grid.appendChild(li);
     }
-  };
+    updateUseButton();
+  }
 
-  const open = ()=>{ selected = getSavedSkinId(); render(); ov.classList.remove('hidden'); ov.setAttribute('aria-hidden','false'); };
-  const close= ()=>{ ov.classList.add('hidden'); ov.setAttribute('aria-hidden','true'); };
+  function updateUseButton(){
+    const s = SKINS.find(k=>k.id===selected);
+    const unlocked = isSkinUnlocked(selected) || s.price===0;
+    btnUse.textContent = unlocked ? 'Usar skin selecionada' : `Comprar por 🪙 ${s.price}`;
+    btnUse.disabled = !unlocked && getCoins() < s.price;
+  }
+
+  function open(){
+  if (Game.state !== 'menu') {
+      // feedback rápido e aborta
+      const btn = document.getElementById('btnSkins');
+      btn?.animate([{transform:'scale(1)'},{transform:'scale(1.05)'},{transform:'scale(1)'}],{duration:160});
+      return; // só no menu
+    }
+    selected = localStorage.getItem('skinId') || 'classic';
+    render();
+    ov.classList.remove('hidden');
+    ov.setAttribute('aria-hidden','false');
+  }
+
+  function close(){ ov.classList.add('hidden'); ov.setAttribute('aria-hidden','true'); }
 
   btnSkins.addEventListener('click', open);
   btnClose?.addEventListener('click', close);
   ov.addEventListener('click', (e)=>{ if (e.target===ov) close(); });
-  addEventListener('keydown', (e)=>{ if (ov.classList.contains('hidden')) return; if (e.key==='Escape') close(); });
-
+  addEventListener('keydown', (e)=>{ if (!ov || ov.classList.contains('hidden')) return; if (e.key==='Escape') close(); });
   btnUse?.addEventListener('click', ()=>{
+    const s = SKINS.find(k=>k.id===selected);
+    const unlocked = isSkinUnlocked(selected) || s.price === 0;
+
+    if (!unlocked) {
+      const coins = getCoins();
+      if (coins < s.price) {
+        // feedback de “moedas insuficientes”
+        btnUse.animate(
+          [{transform:'scale(1)'},{transform:'scale(1.05)'},{transform:'scale(1)'}],
+          {duration:160}
+        );
+        return;
+      }
+      setCoins(coins - s.price);
+      unlockSkin(selected);
+      updateWalletUI();
+    }
+
     localStorage.setItem('skinId', selected);
-    applySkinById(selected); // já atualiza o preview do player no menu, se você desenha
+    applySkinById(selected);
+
+    // (opcional) se quiser ver o ✔ antes de fechar:
+    render();
+
+    // ✅ fecha o modal
     close();
   });
+
 }
 
