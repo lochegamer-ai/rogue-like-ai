@@ -180,6 +180,16 @@ const Game={
 };
 function rand(){ Game.rngSeed = (Game.rngSeed*1664525 + 1013904223) >>> 0; return Game.rngSeed/0xffffffff; }
 
+const SKINS = [
+  { id:'classic', name:'Clássica', color:'#ffd34d' },
+  { id:'jade',    name:'Jade',     color:'#6ef7b0' },
+  { id:'violet',  name:'Violeta',  color:'#c79aff' },
+  { id:'crimson', name:'Carmesim', color:'#ff6b6b' },
+  { id:'sky',     name:'Céu',      color:'#7cd9ff' },
+  { id:'honey',   name:'Honey',    color:'#ffcb4c' } 
+];
+
+
 /* ---------- Bosses ---------- */
 const BOSS_TYPES = [
   {
@@ -647,6 +657,18 @@ function openDoorGap(){
   const left={x:r.x,y:r.y,w:Math.max(0,(d.x-pad)-r.x),h:B}, rx=d.x+d.w+pad, right={x:rx,y:r.y,w:Math.max(0,(r.x+r.w)-rx),h:B};
   if(left.w>0) r.walls.push(left); if(right.w>0) r.walls.push(right);
 }
+
+ // SKINS
+function getSavedSkinId(){ return localStorage.getItem('skinId') || 'classic'; }
+
+function applySkinById(id){
+  const s = SKINS.find(k=>k.id===id) || SKINS[0];
+  Game.player.skinId = s.id;
+  Game.player.color  = s.color;       // draw() já usa p.color → sem quebrar nada
+}
+
+function applySavedSkin(){ applySkinById(getSavedSkinId()); }
+
 
 /* ---------- Perks / Ajuda ---------- */
 const PERK_ICONS={dmg:'⚔️',firer:'🔥',spd:'🏃',size:'🟦',range:'📏',hp:'💖',multi:'🔱',pierce:'🎯',
@@ -1467,7 +1489,9 @@ function startGame(){
     spreadAngle:0, triShot:false, wallBounce:0, chain:0, shotSpeedMul:1, shield:0, shieldMax:0, shieldRegenTime:12, shieldRegenTimer:0, vampChance:0, vampOnKill:0 });
   Game.level=1; Game.enemies.length=0; Game.tears.length=0; Game.pickups.length=0; Game.particles.length=0; Game.boss=null; Game.bossBullets.length=0;
   Game.time=0; Game.over=false; Game.paused=false; Game.choosingPerk=false;
-
+   
+  applySavedSkin(); 
+  
   Game.biomeIndex=0; applyBiome();
   buildRoom(Game.level);
 
@@ -1558,6 +1582,9 @@ function resetIfOver(){ if(!Game.over) return; Game.state='menu'; showStart(); }
 
   setupPerkOverlay();         // agora seguro
   setupStartUI();             // 🔧 garantido
+  setupShopUI();
+
+  applySavedSkin();
 
   function fit(){ const mar=20, W=Math.max(320,innerWidth-mar), H=Math.max(240,innerHeight-mar-80), s=Math.min(W/Game.w,H/Game.h); c.style.width=(Game.w*s)+'px'; c.style.height=(Game.h*s)+'px'; }
   addEventListener('resize',fit); fit();
@@ -1614,3 +1641,54 @@ function hideStart(){
   const c = document.getElementById('game');
   if (c) c.focus();
 }
+
+function setupShopUI(){
+  const grid = document.getElementById('shopGrid');
+  const ov   = document.getElementById('shopOverlay');
+  const btnUse = document.getElementById('btnUseSkin');
+  const btnSkins = document.getElementById('btnSkins');
+  const btnClose = document.getElementById('btnCloseShop');
+
+  if (!grid || !ov || !btnSkins) return; // não existe no DOM? ignora
+
+  let selected = getSavedSkinId();
+
+  const render = ()=>{
+    grid.innerHTML = '';
+    for (const s of SKINS){
+      const item = document.createElement('button');
+      item.className = 'skin-item' + (s.id===selected ? ' selected':'');
+      item.setAttribute('data-id', s.id);
+
+      const sw = document.createElement('div');
+      sw.className = 'skin-swatch'; sw.style.background = s.color;
+
+      const nm = document.createElement('div');
+      nm.className = 'skin-name'; nm.textContent = s.name;
+
+      item.appendChild(sw); item.appendChild(nm);
+      item.addEventListener('click', ()=>{
+        selected = s.id;
+        document.querySelectorAll('.skin-item').forEach(el=>el.classList.remove('selected'));
+        item.classList.add('selected');
+      });
+
+      grid.appendChild(item);
+    }
+  };
+
+  const open = ()=>{ selected = getSavedSkinId(); render(); ov.classList.remove('hidden'); ov.setAttribute('aria-hidden','false'); };
+  const close= ()=>{ ov.classList.add('hidden'); ov.setAttribute('aria-hidden','true'); };
+
+  btnSkins.addEventListener('click', open);
+  btnClose?.addEventListener('click', close);
+  ov.addEventListener('click', (e)=>{ if (e.target===ov) close(); });
+  addEventListener('keydown', (e)=>{ if (ov.classList.contains('hidden')) return; if (e.key==='Escape') close(); });
+
+  btnUse?.addEventListener('click', ()=>{
+    localStorage.setItem('skinId', selected);
+    applySkinById(selected); // já atualiza o preview do player no menu, se você desenha
+    close();
+  });
+}
+

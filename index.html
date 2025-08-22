@@ -31,6 +31,26 @@
           <div class="opt"><span class="radio"><input type="radio" name="diff" id="diffHard"><label for="diffHard">Dificuldade <b>Difícil</b> (+HP/+velocidade)</label></span></div>
           <div class="opt"><label><input type="checkbox" id="muteToggle"> Modo <b>Silencioso</b></label></div>
           <button id="btnStart" class="btn" style="margin-top:8px"><span class="dot"></span> ▶ Começar</button>
+
+          <!-- dentro do menu inicial -->
+          <div class="menu-actions">
+            <button  class="btn" id="btnSkins">Skins</button>
+          </div>
+
+          <!-- Modal Loja de Skins -->
+          <div id="shopOverlay" class="shop hidden" aria-hidden="true">
+            <div class="shop-card">
+              <div class="shop-head">
+                <h3>Skins</h3>
+                <button id="btnCloseShop" class="shop-close" aria-label="Fechar">✕</button>
+              </div>
+              <div id="shopGrid" class="shop-grid"><!-- itens renderizados via JS --></div>
+              <div class="shop-foot">
+                <button id="btnUseSkin" class="primary">Usar skin selecionada</button>
+              </div>
+            </div>
+          </div>
+
         </div>
         <div class="panel">
           <h3 style="margin-top:0">Como Jogar</h3>
