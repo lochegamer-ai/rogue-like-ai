@@ -100,4 +100,10 @@ button.primary{ background:#1f8aa7; border:1px solid #27a6c9; color:white; borde
 button.primary:hover{ filter:brightness(1.08); }
 
 
+.hidden{ display:none !important; }
+#menuOverlay, #startOverlay, #mainMenu, #menu {
+  position:absolute; inset:0; z-index:100; pointer-events:auto;
+}
+
+
 @media (min-width: 900px){ .touch{display:none} }

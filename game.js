@@ -1305,7 +1305,7 @@ function update(dt){
   if((aim.x||aim.y) && Game.fireCD<=0){
     console.debug('fire', aim, 'cd', Game.fireCD);
     shoot(aim.x,aim.y);
-    Game.fireCD=p.fireRate;
+    Game.fireCD = Math.max(0.10, p.fireRate);;
     if(Sfx.enabled) Sfx.shoot();
   }
 
@@ -1505,6 +1505,27 @@ function update(dt){
 
   if(p.hp<=0) Game.over=true;
 }
+
+/* fixes */
+// util de seleção
+const $ = (sel)=> document.querySelector(sel);
+
+// encontra o overlay do menu (tente vários ids comuns)
+function getMenuOverlay(){
+  return $('#menuOverlay') || $('#startOverlay') || $('#mainMenu') || $('#menu');
+}
+
+// mostra/esconde com classe "hidden" + display/aria
+function toggleOverlay(el, show){
+  if (!el) return;
+  el.classList.toggle('hidden', !show);
+  el.style.display = show ? '' : 'none';
+  el.setAttribute('aria-hidden', show ? 'false' : 'true');
+}
+
+function showMenuOverlay(){ toggleOverlay(getMenuOverlay(), true); }
+function hideMenuOverlay(){ toggleOverlay(getMenuOverlay(), false); }
+
 
 /* ---------- Recompensas ---------- */
 function dropRoomClearRewards(isBoss){
@@ -2242,7 +2263,7 @@ function startGame(){
   Game.muted = document.getElementById('muteToggle').checked;
   if(!Game.muted){ try{ Sfx.init(); Sfx.enabled=true; }catch(e){ Sfx.enabled=false; } } else { Sfx.enabled=false; }
 
-  Object.assign(Game.player,{x:400,y:300,vx:0,vy:0,hp:6,hpMax:6,inv:0,hurtFlash:0,score:0,dmg:1,fireRate:0.18,tearSize:8,rangeLife:0.9,multishot:1,pierce:0,perks:[],
+  Object.assign(Game.player,{x:400,y:300,vx:0,vy:0,hp:6,hpMax:6,inv:0,hurtFlash:0,score:0,dmg:1,fireRate:0.40,tearSize:8,rangeLife:0.9,multishot:1,pierce:0,perks:[],
     spreadAngle:0, triShot:false, wallBounce:0, chain:0, shotSpeedMul:1, shield:0, shieldMax:0, shieldRegenTime:12, shieldRegenTimer:0, vampChance:0, vampOnKill:0 });
   Game.level=1; Game.enemies.length=0; Game.tears.length=0; Game.pickups.length=0; Game.particles.length=0; Game.boss=null; Game.bossBullets.length=0;
   Game.time=0; Game.over=false; Game.paused=false; Game.choosingPerk=false;
@@ -2302,26 +2323,13 @@ function resetIfOver(){ if(!Game.over) return; Game.state='menu'; showStart(); }
       return;
     }
 
-    // 🔁 reiniciar (sempre)
-    // if (k === 'r') {
-    //   e.stopPropagation();              // <<< idem
-    //   startGame();
-    //   return;
-    // }
-
     // 🔁 Reiniciar / Voltar ao menu
     if (k === 'r') {
-      e.preventDefault();
-      e.stopPropagation();
-
-      if (Game.over) {
-        // morto → volta ao menu para poder gastar moedas
-        enterMenu();
-      } else if (Game.state !== 'play') {
-        // se já está no menu/pausado, garantir ida ao menu
-        enterMenu();
+      e.preventDefault(); e.stopPropagation();
+      if (Game.over) {     // morto → volta pro menu
+        enterMenu?.();     // se já tem; se não, chame showStart() direto
+        showStart();
       } else {
-        // em jogo vivo → seu restart normal
         startGame();
       }
       return;
@@ -2378,7 +2386,7 @@ function enterMenu(){
   Game.over = false;
   Game.choosingPerk = false;
 
-  // limpa resíduos visuais/entidades
+  // limpa resíduos da run
   Game.enemies.length = 0;
   Game.tears.length = 0;
   Game.bossBullets.length = 0;
@@ -2386,21 +2394,22 @@ function enterMenu(){
   Game.boss = null;
   Game.spawnTimer = 0;
 
-  // player centralizado para preview (opcional)
+  // player central (opcional)
   Game.player.vx = Game.player.vy = 0;
   Game.player.x = Game.w/2 - Game.player.w/2;
   Game.player.y = Game.h/2 - Game.player.h/2;
 
-  // aplica skin e atualiza carteira
+  // UI
+  showMenuOverlay();                 // ✅ mostra o menu
+  toggleOverlay($('#shopOverlay'), false); // fecha loja se aberta
+
+  // áudio/UI auxiliares
   applySavedSkin?.();
   updateWalletUI?.();
-
-  // música do menu, se existir
   Bgm?.play?.('menu');
-
-  // se houver overlay de loja/menu, garanta estado visível/fechado conforme sua UI
-  document.getElementById('shopOverlay')?.classList.add('hidden');
+  showStart();        // <-- garante exibição do menu
 }
+
 
 
 /* ---------- UI Start helpers ---------- */
@@ -2430,28 +2439,74 @@ function setupStartUI(){
     });
   }
 }
+
 function showStart(){
   const ov = document.getElementById('startOverlay'); if(!ov) return;
+
+  // garante seletor .overlay.show
+  ov.classList.add('overlay');
   ov.classList.add('show');
-  ov.inert = false;                          // pode interagir
+  ov.classList.remove('hidden');
+
+  ov.inert = false;
   ov.setAttribute('aria-hidden','false');
 
-  if (Bgm.ready) Bgm.play('menu');
+  // remove qualquer inline que esteja ganhando do CSS
+  ov.style.removeProperty('display');
+  // fallback: se ainda ficou none, força grid
+  if (getComputedStyle(ov).display === 'none') {
+    ov.style.display = 'grid';
+  }
+
+  // fecha loja se estiver aberta (não sobrepor)
+  document.getElementById('shopOverlay')?.classList.add('hidden');
+
+  // foco no botão começar (opcional)
+  document.getElementById('btnStart')?.focus();
 }
+
+
+// function showStart(){
+//   const ov = document.getElementById('startOverlay'); if(!ov) return;
+//   ov.classList.add('show');
+//   ov.inert = false;                          // pode interagir
+//   ov.setAttribute('aria-hidden','false');
+
+//   if (Bgm.ready) Bgm.play('menu');
+// }
+
+// function hideStart(){
+//   const ov = document.getElementById('startOverlay'); if(!ov) return;
+//   // remova foco de qualquer filho (ex.: botão)
+//   const focused = ov.querySelector(':focus'); if (focused) focused.blur();
+
+//   ov.classList.remove('show');
+//   ov.inert = true;                           // torna não-interativo e tira do foco (evita o warning)
+//   ov.setAttribute('aria-hidden','true');
+
+//   // garanta que o canvas receba as teclas
+//   const c = document.getElementById('game');
+//   if (c) c.focus();
+// }
 
 function hideStart(){
   const ov = document.getElementById('startOverlay'); if(!ov) return;
-  // remova foco de qualquer filho (ex.: botão)
+
+  // tira foco de filho (evita “preso” no botão)
   const focused = ov.querySelector(':focus'); if (focused) focused.blur();
 
   ov.classList.remove('show');
-  ov.inert = true;                           // torna não-interativo e tira do foco (evita o warning)
+  ov.classList.add('hidden');
+  ov.inert = true;
   ov.setAttribute('aria-hidden','true');
 
-  // garanta que o canvas receba as teclas
-  const c = document.getElementById('game');
-  if (c) c.focus();
+  // garante que some mesmo se houver CSS conflitante
+  ov.style.display = 'none';
+
+  // foco no canvas para teclas funcionarem
+  document.getElementById('game')?.focus();
 }
+
 
 function setupShopUI(){
   const grid = document.getElementById('shopGrid');
