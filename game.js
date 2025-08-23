@@ -1031,7 +1031,7 @@ const PERKS=[
   {id:'size',title:'Lágrima Maior',desc:'+40% tamanho.',rar:'comum',apply:()=>{Game.player.tearSize=Math.round(Game.player.tearSize*1.4);}},
   {id:'range',title:'Alcance',desc:'+25% duração do projétil.',rar:'comum',apply:()=>{Game.player.rangeLife*=1.25;}},
   {id:'hp',title:'Coração Extra',desc:'+1 coração (máx + cura).',rar:'raro',apply:()=>{Game.player.hpMax+=2; Game.player.hp=clamp(Game.player.hp+2,0,Game.player.hpMax);}},
-  {id:'multi',title:'Tiro Duplo',desc:'+1 tiro paralelo (até 3).',rar:'raro',apply:()=>{Game.player.multishot=Math.min(Game.player.multishot+1,3);  Game.player.spreadAngle=Math.max(Game.player.spreadAngle,18);}},
+  {id:'multi',title:'Tiro multiplo',desc:'+1 tiro paralelo (até 5).',rar:'lend',apply:()=>{Game.player.multishot=Math.min(Game.player.multishot+1,5);  Game.player.spreadAngle=Math.max(Game.player.spreadAngle,18);}},
   {id:'pierce',title:'Perfuração+',desc:'+1 perfuração.',rar:'raro',apply:()=>{Game.player.pierce+=1;}},
   {id:'shield1',title:'Escudo',desc:'+1 escudo que absorve dano.',rar:'raro',apply:()=>{Game.player.shieldMax++; Game.player.shield++; Sfx.shield();}},
   {id:'shieldRegen',title:'Escudo Regenerativo',desc:'+1 escudo e regenera a cada 12s.',rar:'lend',apply:()=>{Game.player.shieldMax++; Game.player.shield++; Game.player.shieldRegenTime=12;}},
@@ -1289,9 +1289,46 @@ function update(dt){
   const isFrozen = Game.player.frozenTime > 0;
 
   const mv = isFrozen ? {x:0, y:0} : getMoveVec();
-  p.vx = mv.x * p.speed; p.vy = mv.y * p.speed;
-  p.x+=p.vx*dt; collideWithWalls(p,'x'); 
-  p.y+=p.vy*dt; collideWithWalls(p,'y');
+
+  const isFrost = currentBiome().id === 'frost';
+  if (isFrost) {
+    // 🔹 Física de gelo (só no bioma gélido)
+    // knobs (ajuste fino sem exagerar):
+    const ACC  = 1500;            // aceleração ao segurar WASD (px/s²)
+    const FRIC = isFrozen ? 4.0   // se congelado, freia mais rápido
+                          : 2.0;  // atrito baixo: desliza
+    const MAX  = p.speed * 1.15;  // limite de velocidade ~ igual ao normal
+
+    // acelera na direção do input…
+    p.vx += mv.x * ACC * dt;
+    p.vy += mv.y * ACC * dt;
+
+    // …e sempre sofre “atrito” (desacelera suavemente)
+    p.vx -= p.vx * FRIC * dt;
+    p.vy -= p.vy * FRIC * dt;
+
+    // limita a velocidade (evita “patinação infinita”)
+    const sp = Math.hypot(p.vx, p.vy);
+    if (sp > MAX) { const k = MAX / sp; p.vx *= k; p.vy *= k; }
+
+  } else {
+    // 🔸 biomas normais: comportamento original
+    p.vx = mv.x * p.speed; 
+    p.vy = mv.y * p.speed;
+  }
+
+  // movimento + colisão (igual ao seu, com amortecimento na batida no gelo)
+  const prevX = p.x;
+  p.x += p.vx * dt;
+  collideWithWalls(p,'x');
+  // se bateu forte na parede no gelo, zera o eixo pra não “vibrar”
+  if (isFrost && Math.abs(p.x - prevX) < Math.abs(p.vx*dt)*0.25) p.vx = 0;
+
+  const prevY = p.y;
+  p.y += p.vy * dt;
+  collideWithWalls(p,'y');
+  if (isFrost && Math.abs(p.y - prevY) < Math.abs(p.vy*dt)*0.25) p.vy = 0;
+
 
   // 🔹 NOVO: rastro da skin (se houver)
   if (Game.player.fx?.trail) updatePlayerTrail(dt);
