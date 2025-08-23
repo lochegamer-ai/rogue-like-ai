@@ -187,7 +187,7 @@ const SKINS = [
   { id:'crimson', name:'Carmesim',      color:'#ff6b6b', price: 750 },
   { id:'sky',     name:'Céu',           color:'#7cd9ff', price: 600 },
   { id:'honey',   name:'Honey',         color:'#ffcb4c', price: 800 },
-  { id:'neon',    name:'Neon (Rastro)', color:'#7cf5ff', price:12000,
+  { id:'neon',    name:'Neon (Rastro)', color:'#ec189bff', price:12000,
   fx:{ glow:true, trail:{ life:0.5, spacing:0.02, max:32, radius:18 } } },
   { id:'shiny', name:'Purple Bubble (Partículas)', color:'#df24d5ff', price:13000,
   fx:{
@@ -1051,7 +1051,23 @@ function update(dt){
     for(let j=Game.enemies.length-1;j>=0;j--){
       const e=Game.enemies[j]; if(!aabb(t.x,t.y,t.w,t.h,e.x,e.y,e.w,e.h)) continue;
 
-      e.hp-=t.dmg; if(Sfx.enabled) Sfx.hit(); spawnBurst(e.x+e.w/2,e.y+e.h/2,8,'#62ff9e');
+      // 🔵 escudo primeiro (se existir)
+      let dmg = t.dmg;
+      if (e.shield > 0) {
+        const use = Math.min(e.shield, dmg);
+        e.shield -= use;
+        dmg -= use;
+        // feedback opcional quando o escudo é atingido
+        spawnBurst(e.x+e.w/2,e.y+e.h/2,6,'#a4e8ff');
+      }
+
+      if (dmg > 0) {
+        e.hp -= dmg;
+        if (Sfx.enabled) Sfx.hit();
+        spawnBurst(e.x+e.w/2,e.y+e.h/2,8,'#62ff9e');
+      }
+      
+      if(Sfx.enabled) Sfx.hit(); spawnBurst(e.x+e.w/2,e.y+e.h/2,8,'#62ff9e');
       if(Game.player.vampChance>0 && Math.random()<Game.player.vampChance) heal(1);
       hit=true; if(e.hp<=0){ killEnemy(j,e,true); }
       if(t.chain>0){ const nxt=findNearestEnemyExcept(e,t.x+t.w/2,t.y+t.h/2,180); if(nxt){ const dx=nxt.x+nxt.w/2-(t.x+t.w/2), dy=nxt.y+nxt.h/2-(t.y+t.h/2), m=Math.hypot(dx,dy)||1; t.vx=(dx/m)*t.speed; t.vy=(dy/m)*t.speed; t.chain--; if(t.pierce>0)t.pierce--; } else { if(t.pierce>0)t.pierce--; else Game.tears.splice(i,1); } }
@@ -1086,6 +1102,11 @@ function update(dt){
   if (aabb(p.x, p.y, p.w, p.h, e.x, e.y, e.w, e.h)) {
     // 1) SEMPRE separa (impede sobreposição)
     separateEnemyFromPlayer(e, Game.player);
+
+    // ❄️ Gélido: encostar congela (independe de invulnerabilidade; se preferir, adicione && p.inv<=0)
+    if (currentBiome().id === 'frost' && p.inv <= 0) {
+      Game.player.frozenTime = Math.max(Game.player.frozenTime, 0.5); // 0.5s de congelamento
+    }
 
     // 2) Dano só se não estiver invulnerável
     if (Game.player.inv <= 0) {
@@ -1215,24 +1236,56 @@ function spawnEnemy(isFromBoss=false){
   const r=Game.room, B=28, pad=8, eW=22, eH=22;
   const inner={x:r.x+B+pad,y:r.y+B+pad,w:r.w-2*(B+pad),h:r.h-2*(B+pad)};
   const sides=['top','bottom','left','right']; let tries=40;
+
   while(tries--){
     const side=sides[Math.floor(rand()*sides.length)]; let x=inner.x,y=inner.y;
     if(side==='top'){y=inner.y; x=inner.x+rand()*(inner.w-eW);}
     if(side==='bottom'){y=inner.y+inner.h-eH; x=inner.x+rand()*(inner.w-eW);}
     if(side==='left'){x=inner.x; y=inner.y+rand()*(inner.h-eH);}
     if(side==='right'){x=inner.x+inner.w-eW; y=inner.y+rand()*(inner.h-eH);}
+
     const px=Game.player.x+Game.player.w/2, py=Game.player.y+Game.player.h/2, cx=x+eW/2, cy=y+eH/2;
     const farEnough=Math.hypot(cx-px,cy-py)>(isFromBoss?40:80);
+
     if(!rectCollidesWalls(x,y,eW,eH) && farEnough){
       const bm=currentBiome();
-      const e={x,y,w:eW,h:eH,color:bm.colors.enemy,
-               speed:(110+rand()*50)*Game.difficulty.spdMul,vx:0,vy:0,jitter:(rand()*0.6+0.7),hp:Math.ceil(2*Game.difficulty.hpMul)};
-      Game.enemies.push(e); return;
+      const baseHp = Math.ceil(2*Game.difficulty.hpMul);
+
+      const e={
+        x,y,w:eW,h:eH,color:bm.colors.enemy,
+        speed:(110+rand()*50)*Game.difficulty.spdMul, vx:0, vy:0,
+        jitter:(rand()*0.6+0.7),
+        hp: baseHp,
+        hpMax: baseHp
+      };
+      if (bm.id === 'frost') {
+        e.shieldMax = Math.ceil(1.5 * Game.difficulty.hpMul);
+        e.shield    = e.shieldMax;
+      }
+      Game.enemies.push(e);
+      return;
     }
   }
+
+  // 🔧 Fallback (centro) — agora com hpMax e, no Gélido, escudo cheio
   const x=r.x+B+pad+inner.w/2-eW/2, y=r.y+B+pad+inner.h/2-eH/2;
-  Game.enemies.push({x,y,w:eW,h:eH,color:currentBiome().colors.enemy,speed:(110+rand()*50)*Game.difficulty.spdMul,vx:0,vy:0,jitter:(rand()*0.6+0.7),hp:Math.ceil(2*Game.difficulty.hpMul)});
+  const bm=currentBiome();
+  const baseHp = Math.ceil(2*Game.difficulty.hpMul);
+
+  const e={
+    x,y,w:eW,h:eH,color:bm.colors.enemy,
+    speed:(110+rand()*50)*Game.difficulty.spdMul, vx:0, vy:0,
+    jitter:(rand()*0.6+0.7),
+    hp: baseHp,
+    hpMax: baseHp
+  };
+  if (bm.id === 'frost') {
+    e.shieldMax = Math.ceil(1.5 * Game.difficulty.hpMul);
+    e.shield    = e.shieldMax;
+  }
+  Game.enemies.push(e);
 }
+
 
 function spawnEnemy(isFromBoss = false, bossColor = null) {
   const r = Game.room, B = 28, pad = 8, eW = 22, eH = 22;
@@ -1281,6 +1334,12 @@ function spawnEnemy(isFromBoss = false, bossColor = null) {
 }
 
 function updateEnemy(e, dt){
+
+  if (currentBiome().id==='frost' && e.shieldMax==null){
+    e.shieldMax = Math.ceil(1.5 * Game.difficulty.hpMul);
+    e.shield    = e.shieldMax;
+  }
+
   // 1) calcula direção/velocidade
   const p = Game.player;
   const cx = e.x + e.w/2, cy = e.y + e.h/2;
@@ -1437,8 +1496,35 @@ function draw(){
   for(const e of Game.enemies){
     ctx.fillStyle=e.color; roundRect(ctx,e.x,e.y,e.w,e.h,6); ctx.fill();
     ctx.fillStyle="#140b18"; ctx.fillRect(e.x+6,e.y+8,3,3); ctx.fillRect(e.x+e.w-9,e.y+8,3,3);
-    ctx.fillStyle="rgba(0,0,0,0.5)"; ctx.fillRect(e.x,e.y-6,e.w,4);
-    ctx.fillStyle="#62ff9e"; ctx.fillRect(e.x,e.y-6,(e.w)*(e.hp/Math.max(1,Math.ceil(2*Game.difficulty.hpMul))),4);
+    // 🔋 barras (Gélido = 2 barras; outros biomas = barra única padrão)
+    const isFrost = currentBiome().id === 'frost';
+    const hpMax   = e.hpMax || Math.max(1, Math.ceil(2*Game.difficulty.hpMul));
+
+    if (isFrost) {
+      // fundo das barras
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      // vida (vermelha) – embaixo
+      const hpW = Math.max(0, (e.w) * (e.hp / hpMax));
+      ctx.fillRect(e.x, e.y - 5, e.w, 4);
+      ctx.fillStyle = "#ff5a66"; // vermelho
+      ctx.fillRect(e.x, e.y - 5, hpW, 4);
+
+      // escudo (azul) – acima
+      const shMax = e.shieldMax || 1;
+      const shieldFrac = Math.max(0, Math.min(1, (e.shield || 0) / shMax));
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(e.x, e.y - 10, e.w, 3);
+      ctx.fillStyle = "#7fc9ff"; // azul
+      ctx.fillRect(e.x, e.y - 10, e.w * shieldFrac, 3);
+
+    } else {
+      // barra única padrão (como já era)
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      ctx.fillRect(e.x, e.y - 6, e.w, 4);
+      ctx.fillStyle = "#62ff9e";
+      ctx.fillRect(e.x, e.y - 6, (e.w) * (e.hp / hpMax), 4);
+    }
+
   }
   if(Game.boss) drawBoss(Game.ctx);
 
