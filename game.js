@@ -185,7 +185,7 @@ const Nav = {
   margin: 10,       // “raio” de segurança do inimigo contra paredes
   ox:0, oy:0, cols:0, rows:0,
   walk:[], dist:null, flow:[],
-  lastTarget:-1, acc:0, recalcEvery:0.22,
+  lastTarget:-1, acc:0, recalcEvery:0.15,
 
   idx(c,r){ return (c<0||r<0||c>=this.cols||r>=this.rows) ? -1 : r*this.cols+c; },
   cellFromXY(x,y){ const c=Math.floor((x-this.ox)/this.cell), r=Math.floor((y-this.oy)/this.cell); return {c,r,idx:this.idx(c,r)}; },
@@ -852,6 +852,7 @@ const BOSS_TYPES = [
 // });
 /* ---------- Construção da sala ---------- */
 function buildRoom(level){
+  applyLevelScaling(level);
   const r=Game.room, B=28;
   Game.enemies.length=0; Game.tears.length=0; Game.pickups.length=0; Game.particles.length=0; Game.boss=null; Game.bossBullets.length=0;
   r.walls=[]; r.topWall={x:r.x,y:r.y,w:r.w,h:B}; r.walls.push(r.topWall);
@@ -911,7 +912,15 @@ function spawnBoss(level){
   const r   = Game.room;
 
   const w = T.size[0], h = T.size[1];
-  const hpBase = Math.round((50 + level * 6) * T.hpMul * (Game.hardMode ? 1.15 : 1));
+
+  // --- NOVO: escala por "qual chefe é" (boss a cada 5 fases) ---
+  const bossIndex = Math.floor((Math.max(1, level) - 1) / 5) + 1; // 1º boss=1, 2º=2, ...
+  const bossStepMul = Math.pow(2.20, bossIndex - 1);               // +120% a cada boss (×2.2, ×4.84, ...)
+
+  // sua base anterior, agora multiplicada
+  const hpBase = Math.round(
+    (50 + level * 6) * T.hpMul * (Game.hardMode ? 1.15 : 1) * bossStepMul
+  );
 
   Game.boss = {
     type: T,
@@ -937,8 +946,18 @@ function openDoorGap(){
   const left={x:r.x,y:r.y,w:Math.max(0,(d.x-pad)-r.x),h:B}, rx=d.x+d.w+pad, right={x:rx,y:r.y,w:Math.max(0,(r.x+r.w)-rx),h:B};
   if(left.w>0) r.walls.push(left); if(right.w>0) r.walls.push(right);
 }
+// Dificulty
+// 30% a mais por fase (multiplicativo) × multiplicadores do bioma
+function applyLevelScaling(level){
+  const bm = currentBiome?.() || { mul:{hp:1, spd:1} };
+  const perLevelHP = Math.pow(1.30, Math.max(0, level - 1)); // 1.0, 1.3, 1.69, ...
+  Game.difficulty.hpMul = perLevelHP * (bm.mul?.hp || 1);
 
- // SKINS
+  // se quiser escalar um pouco a velocidade por fase, pode ligar esta linha:
+  // Game.difficulty.spdMul = (1 + 0.04 * Math.max(0, level - 1)) * (bm.mul?.spd || 1);
+}
+
+// SKINS
 function getSavedSkinId(){ return localStorage.getItem('skinId') || 'classic'; }
 
 function applySkinById(id){
@@ -1629,7 +1648,7 @@ function updateEnemy(e, dt){
   } else {
     // 2) Sem LOS → aponta para um waypoint suavizado
     if (e.nav.wpX === null || e.nav.acc >= e.nav.recalc) {
-      const wp = Nav.furthestVisibleAhead(cx, cy, 14); // olha 14 células à frente
+      const wp = Nav.furthestVisibleAhead(cx, cy, 18); // olha 14 células à frente
       e.nav.wpX = wp.x; e.nav.wpY = wp.y;
       e.nav.acc = 0;
     }

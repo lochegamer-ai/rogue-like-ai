@@ -1,43 +1,38 @@
 # Rogue-Isaac (HTML/Canvas)
 
-Joguinho top‑down feito com **HTML + CSS + JavaScript (Canvas 2D)**, sem dependências.
-Foco em aprendizado prático: loop de jogo simples, colisão AABB, chefes com padrões e trilha sonora por bioma.
+Joguinho top‑down feito com **HTML + CSS + JavaScript (Canvas 2D)**, sem dependências. Foco em aprendizado prático.
 
 > Abra `index.html` no navegador e jogue. Tudo roda localmente.
 
 ---
 
 ## 🎮 Como jogar
-
-- **Mover:** `W A S D` ou **setas**  
-- **Atirar (direcional):** `I J K L`  
-- **Mira com mouse:** mova o cursor • **Disparo:** botão **esquerdo**  
-- **Pausar:** `P`  
-- **Reiniciar:** `R`  
-- **Ajuda / Perks:** `H` (pergaminho)  
-- **Menu:** `Enter` ou `Espaço` na tela inicial  
+- **Mover:** `W A S D` ou **setas`
+- **Atirar (direcional):** `I J K L`
+- **Mira com mouse:** mova o cursor • **Disparo:** botão **esquerdo**
+- **Pausar:** `P`  •  **Reiniciar:** `R`
+- **Ajuda / Perks:** `H` (pergaminho)
+- **Menu:** `Enter` ou `Espaço` na tela inicial
 
 > Alguns navegadores só liberam áudio após a **primeira interação** (clique/tecla).
 
 ---
 
-## ✨ Recursos
-
+## ✨ Principais recursos
 - **Loop clássico:** `init()`, `update(dt)`, `draw()`, `requestAnimationFrame`.
-- **Canvas 2D:** retângulos arredondados, sombras, partículas e HUD.
-- **Colisão AABB** (player×paredes, projéteis×paredes, projéteis×inimigos, etc.).
-- **Mira combinada:** mantém `IJKL` **e** adiciona **mouse + botão esquerdo**.
-- **Separação física:** inimigos e chefes **não invadem** o player (anti-overlap + anti‑encosto).
-- **Chefes (bosses):**
-  - **Gárgula (bioma gelo):** AOE que **congela** por 0.5s + **estalactites** telegrafadas (sombra 0.5s) com queda suavizada.
-  - Outros padrões (dashes, leques de projéteis, invocações, etc.).
-- **Música por bioma** com **fade** e modo **solo** (nunca tocam 2 faixas juntas).
-- **Hot reload amigável:** tudo em arquivos simples, fácil de testar num server estático.
+- **Canvas 2D:** formas, sombras, partículas, HUD, barras custom.
+- **Colisão AABB** e separação física (inimigos/chefes não invadem o player).
+- **Mira combinada:** `IJKL` **e** mouse.
+- **Música por bioma** com **fade** e modo **solo** (nunca sobrepõe).
+- **Loja de skins** com **moedas persistentes** (`localStorage`).
+- **Skins com FX:** rastro **Neon** e partículas **Shiny** (configuráveis por skin).
+- **Biomas especiais:** Cripta escura com vinheta; Gélido com escudo e congelamento por contato.
+- **IA de navegação:** flow‑field em grid com **diagonais seguras**, **string‑pulling** (waypoint mais distante visível) e **desvio de paredes** (steering).
+- **Escalonamento de dificuldade:** +30% HP de inimigos por fase; chefes com +120% HP a cada encontro.
 
 ---
 
 ## 📂 Estrutura
-
 ```
 /assets
   /audio
@@ -52,100 +47,113 @@ index.html
 game.js
 styles.css            (opcional; pode estar inline no index.html)
 ```
-
-> Os nomes das faixas podem variar — veja o mapeamento em `BIOME_MUSIC` no `game.js`.
+> Nomes das faixas podem variar — veja `BIOME_MUSIC` em `game.js`.
 
 ---
 
 ## 🔊 Música (BGM)
-
-- Use `Bgm.unlock()` na **primeira interação** (ex.: clique no overlay inicial) para liberar áudio.  
-- `Bgm.play(name)` faz **fade‑out** da faixa atual (pausando no fim) e **fade‑in** da nova.  
-- `_stopAllExcept(next)` garante **solo** (evita 2 músicas simultâneas).  
-- `Bgm.setMuted(bool)` integra com o toggle de mute do menu.  
-- Mapeamento por bioma (exemplo):
-
-```js
-const BIOME_MUSIC = {
-  crypt:  { stage: 'stage_crypt',  boss: 'boss_crypt'  },
-  frost:  { stage: 'stage_frost',  boss: 'boss_frost'  },
-  swamp:  { stage: 'stage_swamp',  boss: 'boss_swamp'  },
-  tech:   { stage: 'stage_tech',   boss: 'boss_tech'   },
-  forest: { stage: 'stage_forest', boss: 'boss_forest' }
-};
-```
-
-Se aparecer `ERR_FILE_NOT_FOUND`, confira caminho/nomes em `assets/audio/bgm/`.
+- `Bgm.unlock()` após a primeira interação para liberar áudio.
+- `Bgm.play(name)` faz **fade-out** da faixa atual e **fade-in** da nova; `_stopAllExcept(next)` garante **solo**.
+- Mapeamento por bioma (`BIOME_MUSIC`): `{ crypt, frost, swamp, tech, forest } → { stage, boss }`.
 
 ---
 
-## 🧠 Arquitetura (resumo)
+## 🛍 Loja de Skins & Moedas
+- **Carteira:** `coins` em `localStorage` (mostrada no menu e no HUD).
+- **Coleta:** `collect('coin')` soma **imediatamente** (à prova de F5/morte).
+- **Loja:** botão **Skins** no menu abre modal com cards; skins podem **custar** moedas.
+- **Persistência:** skins compradas e **skin ativa** (`skinId`) ficam salvas.
 
-- **Estado global:** `Game.state`, `Game.room` (bounds/portas/parede), `Game.player`, `Game.enemies`, `Game.boss`, `Game.tears`, `Game.bossBullets`, etc.
-- **Pausa real:** `update(dt)` retorna cedo quando `Game.paused`; `draw()` continua (overlay “⏸”).
-- **Input:**
-  - **Movimento:** `getMoveVec()` (teclado).
-  - **Tiro:** `getFireVec()` combina **IJKL** e **mouse (botão esquerdo)**.
-  - `Game.mouse = {x,y,down,inside}` + `setupMouse(canvas)` converte coordenadas por `getBoundingClientRect`.
-- **Anti-overlap:**  
-  - **Antes de mover** inimigos/boss: anti‑encosto (reduz aproximação se já estiver colado).  
-  - **Depois de mover:** `separateEnemyFromPlayer(e,p)` para **desgrudar** (mesmo com `p.inv > 0`).
-- **Boss Gélido (exemplo):**
-  - AOE com congelamento (0.5s).  
-  - Estalactites com **telegraph** (sombra 0.5s), **easing**, **trail** e partículas de impacto.
+### Skins com efeitos (FX)
+- **Neon (Rastro):** brilho (`glow`) + rastro gradiente suave sob o player.
+- **Shiny (Partículas):** pontos luminosos cintilando ao redor (render aditivo).
+> Outros visuais continuam sólidos; os FX só rodam se a skin definida tiver `fx`.
 
 ---
 
-## 🕹 Controles & Acessibilidade
+## ❄️ Bioma Gélido (Frost)
+- **Inimigos com escudo:** ganham `shield/shieldMax` **azul**. Dano consome escudo **antes** da vida.
+- **Duas barras:** **azul** (escudo, em cima) + **vermelha** (vida, embaixo) nos inimigos.
+- **Contato congela:** encostar em inimigo aplica `frozenTime ≈ 0.5s` no player.
 
-- **Mover:** `WASD`/setas • **Tiro:** `IJKL` ou mouse + botão esquerdo  
-- **Pausa:** `P` • **Reiniciar:** `R` • **Perks:** `H`
-- **Acessibilidade:** alto contraste no HUD, mira por teclado/mouse, BGM com “duck” opcional ao pausar.
+---
+
+## ☠️ Cripta escura (Crypt)
+- **Vinheta** focada no player (círculo de luz reduzido, bordas escuras).
+- A vinheta fica **ativa**:
+  - em **salas normais**: até `room.cleared` (quando a **porta** aparece);
+  - em **sala de chefe**: enquanto o **boss tiver HP**.
+- **Barra do boss overlay:** `drawBossHPOverlay` desenha **por cima** da vinheta (a barra interna do `drawBoss` foi desativada).
+
+---
+
+## 🧠 IA de Inimigos
+- **Flow‑field** em grid (células ~24px), com **diagonais seguras** (sem cortar quina).
+- **String‑pulling** leve: mira no **waypoint mais distante ainda visível**.
+- **LOS direta:** se o inimigo enxerga o player, persegue em linha reta.
+- **Steering anti‑parede:** desvio suave quando próximo a paredes/quinas.
+- **Fallbacks**: seed do BFS procura célula caminhável mais próxima do player; sample sempre retorna algo válido para não “parar”.
+
+### Parâmetros úteis (em `Nav`)
+- `cell`: tamanho do grid (padrão 24). Menor = mais preciso; maior = mais leve.
+- `margin`: “raio” de segurança contra paredes (padrão 12–14).
+- `recalcEvery`: recálculo do campo (padrão ~0.15–0.22s).
+
+---
+
+## 📈 Escalonamento por fase/chefe
+- **Inimigos:** `Game.difficulty.hpMul = 1.30^(level-1) × biome.mul.hp` ⇒ **+30% por fase** (multiplicativo).
+- **Chefes:** `hpBase × (2.20)^(bossIndex-1)` ⇒ **+120% por chefe** (multiplicativo). Boss index ≈ `floor((level-1)/5)+1`.
+
+> A velocidade pode ser ajustada via `Game.difficulty.spdMul` (opcional).
+
+---
+
+## 🧪 QA Checklist
+- [ ] Loja abre só no **menu**; compra/uso de skins atualiza e **persiste**.
+- [ ] Coleta de moedas persiste imediatamente (valor visível no HUD e após F5).
+- [ ] Skins **Neon** e **Shiny** aplicam FX apenas quando selecionadas.
+- [ ] **Gélido:** inimigos têm **escudo azul** cheio no spawn; congelam no contato.
+- [ ] **Cripta:** vinheta ativa até **porta** surgir (ou boss morrer). Barra do boss **sempre visível** (overlay único).
+- [ ] IA: inimigos contornam paredes, não empacam em quinas, perseguem suavemente.
+- [ ] Escalonamento: inimigos mais **tanque** a cada fase; chefes bem mais robustos por encontro.
+
+---
+
+## 🗺️ (Opcional) Tilemap
+O gameplay atual é independente de tiles. Há demos e um gerador de **template 32×32** por bioma (6×6 ou 8×8). Dá para plugar a camada de tiles depois sem quebrar nada.
 
 ---
 
 ## 🚀 Rodando localmente
-
-Abrir direto funciona, mas um servidor local evita bloqueios de mídia/CORS:
-
 ```bash
 # Python
 python -m http.server 5500
-
 # Node
 npx serve .
-
 # Depois acesse
 http://localhost:5500
 ```
 
 ---
 
-## 🧪 QA Checklist
-
-- [ ] Pausa (`P`) congela a simulação e exibe overlay.  
-- [ ] Reinício (`R`) reseta estado corretamente.  
-- [ ] `H` abre/fecha o pergaminho de perks.  
-- [ ] IJKL e mouse (botão esquerdo) funcionam em paralelo.  
-- [ ] Inimigos e boss **não** invadem o player (há separação).  
-- [ ] Gárgula: AOE congela por 0.5s; estalactites telegrafam 0.5s antes.  
-- [ ] Trilha por bioma troca com fade e nunca sobrepõe.
-
----
-
-## 🗺️ (Opcional) Tilemap
-
-O jogo atual não depende de tileset. Há demos e um **gerador de template 32×32** para montar PNGs por bioma (6×6 ou 8×8). Quando quiser, dá para plugar a camada de tiles sem quebrar o gameplay.
+## 📘 CHANGELOG (últimas atualizações)
+- **Loja de skins** com moedas persistentes; botão no menu, modal com cards e preços.
+- **Carteira** visível no menu e **contador de moedas no HUD**.
+- **Coleta de moedas** persistida imediatamente (à prova de F5/morte).
+- **Skins FX:**
+  - **Neon (Rastro):** brilho + rastro gradiente.
+  - **Shiny (Partículas):** brilho + partículas cintilantes ao redor.
+- **Cripta escura:** vinheta condicional (sala normal até porta; boss até morrer) + **barra de boss overlay** por cima da vinheta.
+- **Gélido:** inimigos com **escudo azul** e **congelamento por contato**.
+- **IA aprimorada:** flow‑field com **8 direções**, **string‑pulling** e **desvio de paredes**; fallbacks para evitar “parar”.
+- **Escalonamento:** inimigos +30% HP/fase; chefes +120% HP por encontro.
 
 ---
 
 ## 🤝 Contribuindo
-
-PRs e issues são bem-vindos! Sugestões de bosses, perks, balance e UI/UX também.
-
----
+PRs e issues são bem‑vindos! Sugestões de bosses, perks, balance e UX também.
 
 ## 📜 Licença
-
-**MIT** — faça bom uso, dê os créditos e compartilhe melhorias.
+**MIT** — use, credite e compartilhe melhorias.
 
