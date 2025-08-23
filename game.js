@@ -178,6 +178,269 @@ const Game={
   choosingPerk:false, offered:[],
   boss:null, bossBullets:[]
 };
+
+// 🔹 Navegação por flow-field (grid grosseiro)
+const Nav = {
+  cell: 24,         // tamanho da célula do grid (ajuste fino)
+  margin: 10,       // “raio” de segurança do inimigo contra paredes
+  ox:0, oy:0, cols:0, rows:0,
+  walk:[], dist:null, flow:[],
+  lastTarget:-1, acc:0, recalcEvery:0.22,
+
+  idx(c,r){ return (c<0||r<0||c>=this.cols||r>=this.rows) ? -1 : r*this.cols+c; },
+  cellFromXY(x,y){ const c=Math.floor((x-this.ox)/this.cell), r=Math.floor((y-this.oy)/this.cell); return {c,r,idx:this.idx(c,r)}; },
+
+  build(){ // chama ao criar a sala
+    const r = Game.room;
+    this.ox = r.x; this.oy = r.y;
+    this.cols = Math.floor(r.w / this.cell);
+    this.rows = Math.floor(r.h / this.cell);
+    const n = this.cols * this.rows;
+    this.walk = new Array(n).fill(false);
+    this.dist = new Int16Array(n);
+    this.flow = new Array(n).fill(0).map(()=>({x:0,y:0}));
+    this.dist.fill(32767);
+    this.lastTarget = -1;
+
+    // marca walkable testando um quadradinho “do tamanho do inimigo”
+    const rad = this.margin;
+    for (let r0=0; r0<this.rows; r0++){
+      for (let c0=0; c0<this.cols; c0++){
+        const cx = this.ox + c0*this.cell + this.cell/2;
+        const cy = this.oy + r0*this.cell + this.cell/2;
+        const free = !rectCollidesWalls(cx-rad, cy-rad, rad*2, rad*2);
+        this.walk[this.idx(c0,r0)] = free;
+      }
+    }
+  },
+
+  update(dt){
+    this.acc += dt;
+    const p = Game.player;
+    const t = this.cellFromXY(p.x+p.w/2, p.y+p.h/2).idx;
+    if (t !== this.lastTarget || this.acc >= this.recalcEvery){
+      this.compute(t);
+      this.lastTarget = t;
+      this.acc = 0;
+    }
+  },
+
+  compute(targetIdx){
+    const n = this.cols*this.rows;
+    this.dist.fill(32767);
+    this.flow.fill({x:0,y:0});
+
+    // garante que o seed do BFS é walkable (próximo do player)
+    let seed = targetIdx;
+    if (seed < 0 || !this.walk[seed]){
+      const p = Game.player;
+      const px = p.x + p.w/2, py = p.y + p.h/2;
+      seed = this.nearestWalkableToXY(px, py, 8);
+    }
+    if (seed < 0) return; // sem seed viável
+
+    const q = [seed];
+    this.dist[seed] = 0;
+
+    while (q.length){
+      const i = q.shift();
+      const d = this.dist[i];
+      const c = i % this.cols, r = (i / this.cols) | 0;
+
+      // 8-vizinhos (inclui diagonais)
+      const neigh = [
+        [c-1,r], [c+1,r], [c,r-1], [c,r+1],
+        [c-1,r-1], [c+1,r-1], [c-1,r+1], [c+1,r+1]
+      ];
+      for (const [nc,nr] of neigh){
+        const ni = this.idx(nc,nr);
+        if (ni<0 || !this.walk[ni]) continue;
+        // anti “cortar quina” nas diagonais
+        const dc = nc - c, dr = nr - r;
+        if (dc !== 0 && dr !== 0){
+          const i1 = this.idx(c+dc, r);
+          const i2 = this.idx(c, r+dr);
+          if (!((i1>=0 && this.walk[i1]) || (i2>=0 && this.walk[i2]))) continue;
+        }
+        if (this.dist[ni] > d+1){
+          this.dist[ni] = d+1;
+          q.push(ni);
+        }
+      }
+    }
+
+    // gera o vetor “desce a ladeira” (aponta para vizinho de menor distância)
+    for (let i=0;i<n;i++){
+      if (!this.walk[i] || this.dist[i] === 32767) continue;
+      const c = i % this.cols, r = (i / this.cols)|0;
+      let best = this.dist[i], vx=0, vy=0;
+
+      const neigh = [
+        [c-1,r], [c+1,r], [c,r-1], [c,r+1],
+        [c-1,r-1], [c+1,r-1], [c-1,r+1], [c+1,r+1]
+      ];
+      for (const [nc,nr] of neigh){
+        const ni = this.idx(nc,nr);
+        if (ni<0 || !this.walk[ni]) continue;
+        const d = this.dist[ni];
+        if (d < best){
+          best = d;
+          vx = nc - c; vy = nr - r;
+        }
+      }
+      const m = Math.hypot(vx,vy) || 1;
+      this.flow[i] = { x: vx/m, y: vy/m };
+    }
+  },
+
+  sample(x,y){
+    const i = this.cellFromXY(x,y).idx;
+    if (i>=0 && this.dist[i] !== 32767){
+      return this.flow[i] || {x:0,y:0};
+    }
+    // fallback: aponta pro player pra nunca ficar parado
+    const px = Game.player.x + Game.player.w/2;
+    const py = Game.player.y + Game.player.h/2;
+    let dx = px - x, dy = py - y; const m = Math.hypot(dx,dy)||1;
+    return { x: dx/m, y: dy/m };
+  },
+
+
+  hasLOS(x1,y1,x2,y2){
+    const pad = this.margin;
+    for (const w of Game.room.walls){
+      if (segmentIntersectsRect(
+        x1,y1,x2,y2,
+        w.x - pad, w.y - pad, w.w + 2*pad, w.h + 2*pad
+      )) return false;
+    }
+    return true;
+  },
+
+  neighbors8(c, r){
+    // dx,dy e custo (usamos custo=1 em tudo para manter BFS leve)
+    return [
+      [c-1,r, 1],[c+1,r, 1],[c,r-1, 1],[c,r+1, 1],           // cardinais
+      [c-1,r-1, 1],[c+1,r-1, 1],[c-1,r+1, 1],[c+1,r+1, 1]    // diagonais
+    ];
+  },
+  _canDiag(c,r,nc,nr){
+    // impede atravessar o vértice entre dois blocos (sem “cortar quina”)
+    const dc = nc - c, dr = nr - r;
+    if (dc === 0 || dr === 0) return true; // não-diagonal
+    const i1 = this.idx(c+dc, r);   // vizinho horizontal
+    const i2 = this.idx(c, r+dr);   // vizinho vertical
+    return (i1>=0 && this.walk[i1]) || (i2>=0 && this.walk[i2]);
+  },
+
+  downhillIdx(i){
+  // devolve o vizinho de menor dist; -1 se já é o target/sem melhor
+  if (i<0 || !this.walk[i] || this.dist[i] === 32767) return -1;
+  const c = i % this.cols, r = (i / this.cols)|0;
+  let best = this.dist[i], bestNi = -1;
+  for (const [nc,nr] of this.neighbors8(c,r)){
+    const ni = this.idx(nc,nr);
+    if (ni<0 || !this.walk[ni]) continue;
+    const d = this.dist[ni];
+    if (d < best && this._canDiag(c,r,nc,nr)) { best = d; bestNi = ni; }
+  }
+  return bestNi;
+},
+
+cellCenter(i){
+  const c = i % this.cols, r = (i / this.cols)|0;
+  return { x: this.ox + c*this.cell + this.cell/2,
+           y: this.oy + r*this.cell + this.cell/2 };
+},
+
+furthestVisibleAhead(cx,cy, steps=12){
+  let i = this.cellFromXY(cx,cy).idx;
+
+  // se célula atual não está no campo, anda um passo na direção amostrada
+  if (i<0 || this.dist[i]===32767){
+    const v = this.sample(cx,cy);
+    return { x: cx + v.x * this.cell, y: cy + v.y * this.cell };
+  }
+
+  let last = this.cellCenter(i);
+  for (let k=0; k<steps; k++){
+    // pega o vizinho “descendo” a distância
+    let best = this.dist[i], bestNi = -1;
+    const c = i % this.cols, r = (i / this.cols)|0;
+    const neigh = [
+      [c-1,r], [c+1,r], [c,r-1], [c,r+1],
+      [c-1,r-1], [c+1,r-1], [c-1,r+1], [c+1,r+1]
+    ];
+    for (const [nc,nr] of neigh){
+      const ni = this.idx(nc,nr);
+      if (ni<0 || !this.walk[ni]) continue;
+      // sem cortar quina
+      const dc = nc - c, dr = nr - r;
+      if (dc !== 0 && dr !== 0){
+        const i1 = this.idx(c+dc, r), i2 = this.idx(c, r+dr);
+        if (!((i1>=0 && this.walk[i1]) || (i2>=0 && this.walk[i2]))) continue;
+      }
+      const d = this.dist[ni];
+      if (d < best){ best = d; bestNi = ni; }
+    }
+    if (bestNi < 0) break;
+    const cpt = this.cellCenter(bestNi);
+    if (this.hasLOS(cx,cy, cpt.x,cpt.y)) last = cpt; else break;
+    i = bestNi;
+  }
+
+  // se ainda “grudou” no mesmo lugar, anda um passinho do flow para evitar 0,0
+  if (Math.hypot(last.x - cx, last.y - cy) < 1){
+    const v = this.sample(cx,cy);
+    return { x: cx + v.x * this.cell, y: cy + v.y * this.cell };
+  }
+  return last;
+},
+
+nearestWalkableToXY(x, y, R = 6){
+  const c0 = Math.floor((x - this.ox) / this.cell);
+  const r0 = Math.floor((y - this.oy) / this.cell);
+  let best = -1, bestD2 = Infinity;
+  for (let dr = -R; dr <= R; dr++){
+    for (let dc = -R; dc <= R; dc++){
+      const c = c0 + dc, r = r0 + dr;
+      const i = this.idx(c, r);
+      if (i < 0 || !this.walk[i]) continue;
+      const cx = this.ox + c*this.cell + this.cell/2;
+      const cy = this.oy + r*this.cell + this.cell/2;
+      const d2 = (cx - x)**2 + (cy - y)**2;
+      if (d2 < bestD2){ bestD2 = d2; best = i; }
+    }
+  }
+  return best; // -1 se nada encontrado
+},
+
+cellCenter(i){
+  const c = i % this.cols, r = (i / this.cols)|0;
+  return { x: this.ox + c*this.cell + this.cell/2,
+           y: this.oy + r*this.cell + this.cell/2 };
+}
+};
+
+// util: interseção segmento × retângulo
+function segmentIntersectsRect(x1,y1,x2,y2, rx,ry,rw,rh){
+  // ponto dentro?
+  const inside = (x,y)=> (x>=rx && x<=rx+rw && y>=ry && y<=ry+rh);
+  if (inside(x1,y1) || inside(x2,y2)) return true;
+
+  // interseção com as 4 arestas
+  return segSeg(x1,y1,x2,y2, rx,ry, rx+rw,ry) ||
+         segSeg(x1,y1,x2,y2, rx,ry, rx,ry+rh) ||
+         segSeg(x1,y1,x2,y2, rx+rw,ry, rx+rw,ry+rh) ||
+         segSeg(x1,y1,x2,y2, rx,ry+rh, rx+rw,ry+rh);
+}
+function segSeg(x1,y1,x2,y2, x3,y3,x4,y4){
+  const ccw=(ax,ay,bx,by,cx,cy)=> (cy-ay)*(bx-ax) > (by-ay)*(cx-ax);
+  return (ccw(x1,y1,x3,y3,x4,y4) !== ccw(x2,y2,x3,y3,x4,y4)) &&
+         (ccw(x1,y1,x2,y2,x3,y3) !== ccw(x1,y1,x2,y2,x4,y4));
+}
+
+
 function rand(){ Game.rngSeed = (Game.rngSeed*1664525 + 1013904223) >>> 0; return Game.rngSeed/0xffffffff; }
 
 const SKINS = [
@@ -617,6 +880,8 @@ function buildRoom(level){
     r.target=0; r.spawned=0; r.cleared=false; r.door=null; Game.spawnTimer=9999; spawnBoss(level);
   }
 
+  Nav.build();
+
   // posição do jogador
   const px = Game.w/2 - Game.player.w/2;
   const pyCenter = Game.h/2 - Game.player.h/2;
@@ -992,6 +1257,9 @@ function loop(now){
 function update(dt){
   if (Game.paused) return;  // ⛔ trava tudo no pause
   if (Game.over)   return;
+
+  Nav.update(dt);
+
   const p=Game.player, r=Game.room;
 
   // 🔷 NOVO: decaimento do congelamento
@@ -1335,21 +1603,52 @@ function spawnEnemy(isFromBoss = false, bossColor = null) {
 
 function updateEnemy(e, dt){
 
+  // estado de navegação do inimigo (uma vez)
+  if (!e.nav) e.nav = { acc: 0, recalc: 0.25, wpX: null, wpY: null };
+  e.nav.acc += dt;
+
   if (currentBiome().id==='frost' && e.shieldMax==null){
     e.shieldMax = Math.ceil(1.5 * Game.difficulty.hpMul);
     e.shield    = e.shieldMax;
   }
 
-  // 1) calcula direção/velocidade
+  // 🔹 direção com LOS + flow-field
   const p = Game.player;
   const cx = e.x + e.w/2, cy = e.y + e.h/2;
   const px = p.x + p.w/2, py = p.y + p.h/2;
-  let dx = px - cx, dy = py - cy, m = Math.hypot(dx,dy)||1;
-  dx/=m; dy/=m;
 
-  e.vx = dx * e.speed;
-  e.vy = dy * e.speed;
-  // (… seu jitter/IA extra …)
+  let dirX = 0, dirY = 0;
+
+  // 1) Se tem linha de visão direta → vai reto
+  if (Nav.hasLOS(cx, cy, px, py)) {
+    let dx = px - cx, dy = py - cy, m = Math.hypot(dx,dy)||1;
+    dirX = dx/m; dirY = dy/m;
+    // zera waypoint (não precisa enquanto vê o player)
+    e.nav.wpX = e.nav.wpY = null;
+
+  } else {
+    // 2) Sem LOS → aponta para um waypoint suavizado
+    if (e.nav.wpX === null || e.nav.acc >= e.nav.recalc) {
+      const wp = Nav.furthestVisibleAhead(cx, cy, 14); // olha 14 células à frente
+      e.nav.wpX = wp.x; e.nav.wpY = wp.y;
+      e.nav.acc = 0;
+    }
+
+    // Se o waypoint ficou próximo/sem LOS, recalcule no próximo ciclo
+    const wx = e.nav.wpX, wy = e.nav.wpY;
+    const toWP = Math.hypot(wx - cx, wy - cy);
+    if (toWP < Nav.cell * 0.4 || !Nav.hasLOS(cx,cy, wx,wy)) {
+      e.nav.acc = e.nav.recalc; // força recálculo no próximo frame
+    }
+
+    let dx = wx - cx, dy = wy - cy, m = Math.hypot(dx,dy)||1;
+    dirX = dx/m; dirY = dy/m;
+  }
+
+  // 3) Suaviza a direção (evita viradas bruscas)
+  const blend = 0.85;
+  e.vx = (dirX * e.speed) * blend + (e.vx * (1-blend));
+  e.vy = (dirY * e.speed) * blend + (e.vy * (1-blend));
 
   // ⬇️ COLE AQUI (anti-encosto preventivo, antes de mover)
   {
