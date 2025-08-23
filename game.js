@@ -1606,6 +1606,12 @@ function draw(){
     ctx.restore();
   }
   
+  // 🔦 Cripta escura com foco no player
+  if (cryptLightActive()) {
+    drawCryptVignette(ctx);   // desenha por cima do mundo e por baixo do HUD
+  }
+  if (Game.boss) drawBossHPOverlay(ctx);  
+
   drawHUD();
 
   if(Game.paused && !Game.over && !Game.choosingPerk) drawCenterText("⏸ Pausado (P)");
@@ -1652,11 +1658,17 @@ function drawHeart(x,y,size,fillUnits){ const ctx=Game.ctx; ctx.save(); ctx.tran
 function drawCenterText(text){ const ctx=Game.ctx, lines=String(text).split('\n'); ctx.fillStyle="rgba(0,0,0,0.5)"; ctx.fillRect(0,0,Game.w,Game.h);
   ctx.fillStyle=get('--ui'); ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.font="28px system-ui"; lines.forEach((ln,i)=> ctx.fillText(ln, Game.w/2, Game.h/2 + i*34)); ctx.textAlign="left"; ctx.textBaseline="alphabetic"; }
 function drawBoss(ctx){
-  const b=Game.boss; if(!b) return; b.type.draw(b,ctx);
-  const bw=420,bh=12,bx=Game.w/2-bw/2,by=18; ctx.fillStyle="rgba(0,0,0,0.35)"; roundRect(ctx,bx,by,bw,bh,6); ctx.fill();
-  ctx.fillStyle=b.type.color; roundRect(ctx,bx,by,bw*(b.hp/b.hpMax),bh,6); ctx.fill();
-  ctx.fillStyle=get('--ui'); ctx.font="12px system-ui"; ctx.textAlign="center"; ctx.fillText(b.type.name, Game.w/2, by-2); ctx.textAlign="left";
+  const b = Game.boss;
+  if (!b) return;
+
+  // desenha o corpo/shape do boss
+  b.type.draw(b, ctx);
+
+  // ❌ não desenha mais a barra aqui (a nova é overlay no draw())
+  // (mantemos o alinhamento padrão para não afetar outros textos)
+  ctx.textAlign = "left";
 }
+
 function drawStalactite(ctx, b) {
   ctx.save();
   // centro do objeto
@@ -1705,6 +1717,85 @@ function drawCoinIcon(ctx, x, y, s=1){
   ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.beginPath(); ctx.arc(-2, -3, 3, 0, Math.PI*2); ctx.fill();
   ctx.restore();
 }
+
+// Luz da Cripta: gradiente do player até escurecer as bordas
+function drawCryptVignette(ctx){
+  const p = Game.player;
+  const cx = p.x + p.w/2, cy = p.y + p.h/2;
+
+  // 🔦 menor área iluminada
+  const bonus = Game.player.fx?.glow ? 20 : 0;
+  const inner = 70 + bonus, outer = 210 + bonus;
+
+  ctx.save();
+  const g = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+  g.addColorStop(0.00, 'rgba(0,0,0,0)');
+  g.addColorStop(0.55, 'rgba(0,0,0,0.60)');
+  g.addColorStop(1.00, 'rgba(0,0,0,0.94)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, Game.w, Game.h);
+
+  // vinheta extra nos cantos (opcional; pode manter como estava)
+  const vg = ctx.createRadialGradient(Game.w/2, Game.h/2, Math.min(Game.w,Game.h)*0.58,
+                                      Game.w/2, Game.h/2, Math.max(Game.w,Game.h)*0.78);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, 'rgba(0,0,0,0.22)');
+  ctx.fillStyle = vg;
+  ctx.fillRect(0,0,Game.w,Game.h);
+  ctx.restore();
+}
+
+// ATUALIZE
+function cryptLightActive(){
+  if (currentBiome().id !== 'crypt') return false;
+
+  const r = Game.room;
+
+  // Sala de boss: escuro enquanto o boss existir e tiver HP
+  if (r.isBoss) return !!(Game.boss && Game.boss.hp > 0);
+
+  // Sala normal: mantém escuro até a sala estar marcada como "cleared"
+  // (é nesse momento que sua porta aparece)
+  return !r.cleared;
+}
+
+
+function drawBossHPOverlay(ctx){
+  const b = Game.boss;
+  if (!b || b.hp <= 0 || !b.hpMax) return;
+
+  const W = 300, H = 12;
+  const x = (Game.w - W) / 2, y = 8;
+  const frac = Math.max(0, Math.min(1, b.hp / b.hpMax));
+  const name = (b.type && b.type.name) ? b.type.name : 'BOSS';
+
+  ctx.save();
+  // fundo
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  roundRect(ctx, x, y, W, H, 6); ctx.fill();
+
+  // preenchimento com leve gradiente
+  const g = ctx.createLinearGradient(x, y, x+W, y);
+  g.addColorStop(0, '#ff7a86');
+  g.addColorStop(1, '#ff5a66');
+  ctx.fillStyle = g;
+  roundRect(ctx, x+2, y+2, (W-4)*frac, H-4, 4); ctx.fill();
+
+  // contorno sutil
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  roundRect(ctx, x, y, W, H, 6); ctx.stroke();
+
+  // nome
+  ctx.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx.font = '12px system-ui';
+  ctx.textAlign = 'center';
+  ctx.fillText(name, Game.w/2, y + H + 12);
+  ctx.restore();
+}
+
+
+
 // cor #rrggbb → rgba()
 function rgba(hex, a){
   if (!hex || hex[0] !== '#') return hex;
