@@ -130,6 +130,20 @@ const Bgm = {
 };
 
 
+// 🔴 Sala Secreta (config + chance dinâmica)
+const SECRET = {
+  baseChance: 0.07,     // 7% base
+  pityPerRoom: 0.03,    // +3% por sala sem aparecer
+  maxChance: 0.45,      // teto de 45%
+  duration: 60,
+  firstWave: 3,
+  waveEvery: 5.0,
+  waveMin: 1, waveMax: 3,
+  hpScaleMax: 2.2,
+  spdScaleMax: 1.6
+};
+
+
 /* ---------- BIOMAS ---------- */
 const BIOMES = [
   { id:'crypt',  name:'Cripta',     colors:{ floor:'#121826', wall:'#2d3a53', enemy:'#ff5a7d', accent:'#7cf5ff', door:'#9ef0ff' }, mul:{hp:1.00, spd:1.00} },
@@ -155,7 +169,7 @@ const BIOME_MUSIC = {
 };
 
 /* ---------- Estado ---------- */
-const Game={
+const Game = {
   w:800,h:600,ctx:null,keys:{},paused:false,over:false,time:0, rngSeed:1337,
   state:'menu',
   mouse:{ x:0, y:0, down:false, inside:false }, // ← NOVO
@@ -176,8 +190,25 @@ const Game={
   tears:[], fireCD:0, pickups:[],
   particles:[],
   choosingPerk:false, offered:[],
-  boss:null, bossBullets:[]
+  boss:null, bossBullets:[],
+  offering:false,
+  // rastreamento de “pity”
+  stats: {
+    roomsSinceSecret: 0
+  },
+  secret: {
+    active:false,   // está dentro da sala secreta?
+    done:false,     // tempo acabou (porta aberta)?
+    timer:0,        // contador regressivo
+    acc:0,          // acumulador de tempo p/ ondas
+    initial:false,  // já fez a primeira onda?
+    nextLevel:0,    // para onde vai ao sair (ex.: se abriu no 4 → 5)
+    usedThisLevel:false // evita abrir mais de 1 por andar
+  },
 };
+
+Game.meta = Game.meta || {};
+Game.meta.secretLuck = +localStorage.getItem('secretLuck') || 0; // ex.: 0.00 a 0.10
 
 // 🔹 Navegação por flow-field (grid grosseiro)
 const Nav = {
@@ -438,6 +469,28 @@ function segSeg(x1,y1,x2,y2, x3,y3,x4,y4){
   const ccw=(ax,ay,bx,by,cx,cy)=> (cy-ay)*(bx-ax) > (by-ay)*(cx-ax);
   return (ccw(x1,y1,x3,y3,x4,y4) !== ccw(x2,y2,x3,y3,x4,y4)) &&
          (ccw(x1,y1,x2,y2,x3,y3) !== ccw(x1,y1,x2,y2,x4,y4));
+}
+
+function setSecretLuck(v){
+  v = Math.max(0, Math.min(0.5, v));
+  localStorage.setItem('secretLuck', v);
+  Game.meta = Game.meta || {};
+  Game.meta.secretLuck = v;
+}
+function secretChanceNow(){
+  let chance = SECRET.baseChance;
+
+  // pity: sobe a cada sala elegível sem aparecer
+  chance += (Game.stats?.roomsSinceSecret || 0) * SECRET.pityPerRoom;
+
+  // sorte da run (perks/efeitos temporários)
+  chance += (Game.player?.luckSecret || 0);
+
+  // sorte meta (permanente via loja)
+  chance += (Game.meta?.secretLuck || 0);
+
+  // clamp
+  return Math.min(SECRET.maxChance, Math.max(0, chance));
 }
 
 
@@ -852,6 +905,10 @@ const BOSS_TYPES = [
 // });
 /* ---------- Construção da sala ---------- */
 function buildRoom(level){
+  // sala nova começa como não-secreta e pode sortear porta vermelha de novo
+  if (Game.room) { Game.room.isSecret = false; delete Game.room.secretDoor; }
+  Game.secret.usedThisLevel = false;
+
   applyLevelScaling(level);
   const r=Game.room, B=28;
   Game.enemies.length=0; Game.tears.length=0; Game.pickups.length=0; Game.particles.length=0; Game.boss=null; Game.bossBullets.length=0;
@@ -1034,7 +1091,7 @@ const PERKS=[
   {id:'multi',title:'Tiro multiplo',desc:'+1 tiro paralelo (até 5).',rar:'lend',apply:()=>{Game.player.multishot=Math.min(Game.player.multishot+1,5);  Game.player.spreadAngle=Math.max(Game.player.spreadAngle,18);}},
   {id:'pierce',title:'Perfuração+',desc:'+1 perfuração.',rar:'raro',apply:()=>{Game.player.pierce+=1;}},
   {id:'shield1',title:'Escudo',desc:'+1 escudo que absorve dano.',rar:'raro',apply:()=>{Game.player.shieldMax++; Game.player.shield++; Sfx.shield();}},
-  {id:'shieldRegen',title:'Escudo Regenerativo',desc:'+1 escudo e regenera a cada 12s.',rar:'lend',apply:()=>{Game.player.shieldMax++; Game.player.shield++; Game.player.shieldRegenTime=12;}},
+  {id:'shieldRegen',title:'Escudo Regenerativo',desc:'+1 escudo e regenera a cada 5s.',rar:'mit',apply:()=>{Game.player.shieldMax++; Game.player.shield++; Game.player.shieldRegenTime=5;}},
   {id:'tri',title:'Trishot',desc:'3 disparos em leque.',rar:'mit',apply:()=>{Game.player.triShot=true; Game.player.spreadAngle=Math.max(Game.player.spreadAngle,18);}},
   {id:'bounce',title:'Ricochete',desc:'Lágrimas quicam 2x em paredes.',rar:'lend',apply:()=>{Game.player.wallBounce=Math.max(Game.player.wallBounce,2);}},
   {id:'chain',title:'Elétrico',desc:'Encadeia entre inimigos (2 alvos).',rar:'lend',apply:()=>{Game.player.chain=Math.max(Game.player.chain,2);}},
@@ -1177,9 +1234,6 @@ function separateEnemyFromPlayer(e, p) {
   return moved;
 }
 
-
-
-
 /* ---------- Perk overlay restante ---------- */
 function rarityColor(r){ return get(r==='comum'?'--rar-comum': r==='raro'?'--rar-raro': r==='lend'?'--rar-lend':'--rar-mit'); }
 function showPerkOverlay(opts){
@@ -1192,7 +1246,64 @@ function showPerkOverlay(opts){
 }
 function hidePerkOverlay(){ const ov=document.getElementById('perkOverlay'); if(!ov) return; ov.classList.remove('show'); ov.setAttribute('aria-hidden','true'); }
 function offerPerks(){ if(Game.choosingPerk) return; Game.choosingPerk=true; const picks = weightedPickUnique(PERKS,3); Game.offered=picks; showPerkOverlay(picks); }
-function choosePerk(i){ const ch=Game.offered[i]; if(!ch) return; ch.apply(); Game.player.perks.push(ch.id); hidePerkOverlay(); Game.choosingPerk=false; Game.level++; buildRoom(Game.level); Sfx.perk(); }
+function offerPerksSecret(){
+  // já está oferecendo? então não reabrir (evita chamar todo frame)
+  if (Game.secret?.offering || Game.choosingPerk) return;
+
+  Game.secret.offering = true;                    // 🔒 trava
+  Game.perkOverride = { minLegendary:2, mythicBoost:0.5 };
+
+  // abre sua UI normal (ela já popula Game.offered + mostra overlay)
+  if (typeof offerPerks === 'function') {
+    offerPerks();
+  } else if (typeof showPerkOverlay === 'function') {
+    showPerkOverlay();
+  } else {
+    console.warn('offerPerksSecret: não achei offerPerks() / showPerkOverlay()');
+  }
+
+  Game.choosingPerk = true;                      // mantém estado consistente
+}
+
+
+//function choosePerk(i){ const ch=Game.offered[i]; if(!ch) return; ch.apply(); Game.player.perks.push(ch.id); hidePerkOverlay(); Game.choosingPerk=false; Game.level++; buildRoom(Game.level); Sfx.perk(); }
+function choosePerk(i){
+  const ch = Game.offered[i]; 
+  if (!ch) return;
+
+  ch.apply();
+  Game.player.perks.push(ch.id);
+
+  hidePerkOverlay();
+  Game.choosingPerk = false;
+  if (Sfx?.perk) Sfx.perk();
+
+  // 🟥 Saindo da SALA SECRETA
+  if (Game.room?.isSecret && Game.secret?.done) {
+    // limpa overrides e flags
+    Game.perkOverride = null;
+    Game.secret.active = false;
+    Game.secret.done = false;
+    Game.secret.offering = false;
+
+    // avança exatamente para o próximo andar planejado
+    Game.level = Game.secret.nextLevel;
+
+    // monta sala normal do próximo andar
+    buildRoom(Game.level);
+
+    // música normal da fase
+    if (Bgm?.ready) Bgm.play?.('stage');
+
+    return; // evita cair no incremento normal
+  }
+
+  // 🔸 Fluxo normal (fora da sala secreta)
+  Game.level++;
+  buildRoom(Game.level);
+}
+
+
 function weightedPickUnique(pool,k){
   const W={comum:60,raro:28,lend:10,mit:2}; const sel=[], used=new Set();
   for(let i=0;i<k;i++){ let total=0; for(const p of pool){ if(!used.has(p.id)) total+=W[p.rar]; }
@@ -1409,8 +1520,16 @@ function update(dt){
     }
   }
 
-  if(!r.isBoss){ Game.spawnTimer-=dt; if(!r.cleared && r.spawned<r.target && Game.spawnTimer<=0 && Game.enemies.length<Game.maxEnemies){ spawnEnemy(); r.spawned++; Game.spawnTimer=Game.difficulty.spawnEvery; } }
-  else {
+  if (Game.room.isSecret && Game.secret.active) {
+    updateSecretRoom(dt);   // <<< NOVO
+  } else if (!r.isBoss){ 
+    Game.spawnTimer-=dt;
+    if(!r.cleared && r.spawned<r.target && Game.spawnTimer<=0 && Game.enemies.length<Game.maxEnemies){ 
+      spawnEnemy(); 
+      r.spawned++;
+      Game.spawnTimer=Game.difficulty.spawnEvery; 
+    } 
+  } else {
     updateBoss(dt);
 
     // 🔷 SEMPRE impedir sobreposição com o boss (mesmo com invulnerabilidade)
@@ -1421,23 +1540,24 @@ function update(dt){
     }
   }
   for (const e of Game.enemies) {
-  updateEnemy(e, dt);
+    updateEnemy(e, dt);
 
-  if (aabb(p.x, p.y, p.w, p.h, e.x, e.y, e.w, e.h)) {
-    // 1) SEMPRE separa (impede sobreposição)
-    separateEnemyFromPlayer(e, Game.player);
+    if (aabb(p.x, p.y, p.w, p.h, e.x, e.y, e.w, e.h)) {
+      // 1) SEMPRE separa (impede sobreposição)
+      separateEnemyFromPlayer(e, Game.player);
 
-    // ❄️ Gélido: encostar congela (independe de invulnerabilidade; se preferir, adicione && p.inv<=0)
-    if (currentBiome().id === 'frost' && p.inv <= 0) {
-      Game.player.frozenTime = Math.max(Game.player.frozenTime, 0.5); // 0.5s de congelamento
-    }
+      // ❄️ Gélido: encostar congela (independe de invulnerabilidade; se preferir, adicione && p.inv<=0)
+      if (currentBiome().id === 'frost' && p.inv <= 0) {
+        Game.player.frozenTime = Math.max(Game.player.frozenTime, 0.5); // 0.5s de congelamento
+      }
 
-    // 2) Dano só se não estiver invulnerável
-    if (Game.player.inv <= 0) {
-      damagePlayerFrom(e);
+      // 2) Dano só se não estiver invulnerável
+      if (Game.player.inv <= 0) {
+        damagePlayerFrom(e);
+      }
     }
   }
-}
+
   for(let i=Game.bossBullets.length-1;i>=0;i--){
     const b=Game.bossBullets[i]; 
 
@@ -1523,16 +1643,45 @@ function update(dt){
     }
   }
 
-  if(!r.isBoss){
+  if(!r.isBoss) {
     if(!r.cleared && r.spawned>=r.target && Game.enemies.length===0){
-      r.cleared=true; r.door={x:Game.w/2-22,y:r.y+10,w:44,h:22,glow:0}; openDoorGap(); if(Sfx.enabled) Sfx.door();
+      r.cleared=true; 
+
+      r.door={x:Game.w/2-22,y:r.y+10,w:44,h:22,glow:0}; 
+
+      openDoorGap(); 
+
+      if(Sfx.enabled) Sfx.door();
+
       dropRoomClearRewards(false);
+      // 🔴 Chance de porta secreta (apenas sala comum, 1x por andar)
+      if (!Game.secret.usedThisLevel) {
+        const ch = secretChanceNow();
+        if (Math.random() < ch) {
+          r.secretDoor = placeRightSecretDoor(r);
+          Game.stats.roomsSinceSecret = 0;       // reset pity ao ganhar a porta
+        } else {
+          Game.stats.roomsSinceSecret = (Game.stats.roomsSinceSecret || 0) + 1;
+        }
+      }
     }
   }
+  
   if(r.cleared && r.door){
     r.door.glow=(r.door.glow+dt*2)%1;
     if(Math.random()<0.08) spawnDust(r.door.x+r.door.w/2, r.door.y+r.door.h+2, 0.3, get('--door'), 0.8);
     if(aabb(p.x,p.y,p.w,p.h, r.door.x,r.door.y,r.door.w,r.door.h)) offerPerks();
+  }
+
+  // 🔴 Entrar na sala secreta ao encostar na porta vermelha
+  if (r.cleared && r.secretDoor) {
+    r.secretDoor.glow = (r.secretDoor.glow + dt*2) % 1;
+    const sd = r.secretDoor;
+    if (aabb(p.x,p.y,p.w,p.h, sd.x,sd.y,sd.w,sd.h)) {
+      enterSecretRoom();              // <<< NOVO
+      r.secretDoor = null;            // evita re-entrar no mesmo frame
+      return;                         // troca de sala imediatamente
+    }
   }
 
   for(let i=Game.particles.length-1;i>=0;i--){
@@ -1541,7 +1690,8 @@ function update(dt){
   }
 
   if(p.hp<=0) Game.over=true;
-}
+ }
+
 
 /* fixes */
 // util de seleção
@@ -1757,6 +1907,17 @@ function killEnemy(idx,e,killedByPlayer=false){
   if(killedByPlayer && Game.player.vampOnKill>0) heal(Game.player.vampOnKill);
 }
 
+// Remove quaisquer paredes que cruzem a área da porta (com folga) e
+// reconstrói a navegação. Seguro de chamar mesmo se não houver paredes.
+function openDoorGapAt(door, pad=2){
+  if (!door || !Game?.room?.walls) return;
+  const dx = door.x - pad, dy = door.y - pad, dw = door.w + pad*2, dh = door.h + pad*2;
+  Game.room.walls = Game.room.walls.filter(w => !aabb(dx,dy,dw,dh, w.x,w.y,w.w,w.h));
+  // se usa flow-field/nav, reconstrói o grid para refletir o vão
+  if (typeof Nav?.build === 'function') Nav.build();
+}
+
+
 /* ---------- Boss ciclo ---------- */
 function updateBoss(dt){
   const b=Game.boss,p=Game.player; if(!b) return;
@@ -1768,7 +1929,10 @@ function updateBoss(dt){
 function bossDefeated(){
   if(!Game.boss) return; const b=Game.boss; spawnBurst(b.x+b.w/2,b.y+b.h/2,50,b.type.color); if(Sfx.enabled) Sfx.bossDie();
   Game.boss=null; Game.bossBullets.length=0;
-  const r=Game.room; r.cleared=true; r.door={x:Game.w/2-22,y:r.y+10,w:44,h:22,glow:0}; openDoorGap(); if(Sfx.enabled) Sfx.door();
+  const r=Game.room; r.cleared=true; r.door={x:Game.w/2-22,y:r.y+10,w:44,h:22,glow:0}; 
+  openDoorGap();                 // ⬅️ seu comportamento antigo continua
+  openDoorGapAt(r.door);         // ⬅️ NOVO: garante o vão exatamente na área da porta
+  if(Sfx.enabled) Sfx.door();
   dropRoomClearRewards(true);
 }
 function shootBoss(b,dx,dy,speed=180){ const s=Game.bossBullets,size=8,col=b.type.bulletColor||'#f2c7d0'; const x=b.x+b.w/2-size/2+dx*18, y=b.y+b.h/2-size/2+dy*18; s.push({x,y,w:size,h:size,vx:dx*speed,vy:dy*speed,life:3,color:col}); if(Sfx.enabled) Sfx.bossShoot(); }
@@ -1859,13 +2023,43 @@ function damagePlayerFrom(e){
 
 /* ---------- Desenho ---------- */
 function draw(){
-  const ctx=Game.ctx; ctx.clearRect(0,0,Game.w,Game.h); drawFloor();
+  const ctx=Game.ctx; 
+  
+  // 🛡️ frame-guard: zera estados perigosos
+  ctx.save();
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.shadowBlur = 0;
+  ctx.shadowColor = 'transparent';
+
+  ctx.clearRect(0,0,Game.w,Game.h); drawFloor();
   ctx.fillStyle=get('--wall'); for(const w of Game.room.walls) ctx.fillRect(w.x,w.y,w.w,w.h);
 
   const r=Game.room;
   if(r.cleared && r.door){
     const d=r.door; ctx.save(); ctx.shadowColor=get('--door'); ctx.shadowBlur=20 + Math.sin(Game.time*4)*6; ctx.fillStyle=get('--door'); roundRect(ctx,d.x,d.y,d.w,d.h,4); ctx.fill(); ctx.restore();
     ctx.fillStyle="rgba(255,255,255,0.8)"; ctx.font="12px system-ui"; ctx.fillText("Porta ↑", d.x-6, d.y+d.h+12);
+  }
+
+  // 🔴 Porta secreta (direita) — aparece só quando r.secretDoor existe
+  if (r.cleared && r.secretDoor) {
+    const sd = r.secretDoor;
+    const t = (Math.sin(Game.time*5)+1)/2;
+
+    ctx.save();
+    ctx.shadowColor = '#ff4d6d';
+    ctx.shadowBlur = 18 + t*8;
+    ctx.fillStyle = '#ff4d6d';
+    roundRect(ctx, sd.x, sd.y, sd.w, sd.h, 5);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.fillStyle = "rgba(255,220,220,0.9)";
+    ctx.font = "12px system-ui";
+    ctx.textAlign = "right";
+    ctx.fillText("Porta Secreta →", sd.x - 8, sd.y + sd.h/2 + 4);
+    ctx.textAlign = "left";
   }
 
   for(const it of Game.pickups) drawPickup(it);
@@ -1988,11 +2182,35 @@ function draw(){
   }
   if (Game.boss) drawBossHPOverlay(ctx);  
 
+  if (Game.room.isSecret){
+    const s = Math.ceil(Game.secret.timer);
+    Game.ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    Game.ctx.font = '14px system-ui';
+    Game.ctx.textAlign = 'center';
+    Game.ctx.fillText(`Sobreviva: ${s}s`, Game.w/2, 42);
+    Game.ctx.textAlign = 'left';
+  }
+
+
   drawHUD();
 
   if(Game.paused && !Game.over && !Game.choosingPerk) drawCenterText("⏸ Pausado (P)");
   if(Game.over) drawCenterText("💀 Game Over\nPressione R para voltar ao menu");
 }
+
+function placeRightSecretDoor(r){
+  const doorW = 22, doorH = 44;     // porta vertical
+  const B = 28;                     // espessura da borda (usa a que você já usa nas salas)
+  const inset = 2;                  // 2px pra dentro da área jogável (evita colidir com a parede)
+  return {
+    x: r.x + r.w - B - doorW - inset,
+    y: r.y + r.h/2 - doorH/2,
+    w: doorW, h: doorH,
+    glow: 0
+  };
+}
+
+
 function drawMenu(){
   const ctx=Game.ctx;
   ctx.clearRect(0,0,Game.w,Game.h);
@@ -2300,7 +2518,7 @@ function startGame(){
   Game.muted = document.getElementById('muteToggle').checked;
   if(!Game.muted){ try{ Sfx.init(); Sfx.enabled=true; }catch(e){ Sfx.enabled=false; } } else { Sfx.enabled=false; }
 
-  Object.assign(Game.player,{x:400,y:300,vx:0,vy:0,hp:6,hpMax:6,inv:0,hurtFlash:0,score:0,dmg:1,fireRate:0.40,tearSize:8,rangeLife:0.9,multishot:1,pierce:0,perks:[],
+  Object.assign(Game.player,{x:400,y:300,vx:0,vy:0,hp:6,hpMax:6,inv:0,hurtFlash:0,score:0,dmg:1,fireRate:0.35,tearSize:8,rangeLife:0.9,multishot:1,pierce:0,perks:[],
     spreadAngle:0, triShot:false, wallBounce:0, chain:0, shotSpeedMul:1, shield:0, shieldMax:0, shieldRegenTime:12, shieldRegenTimer:0, vampChance:0, vampOnKill:0 });
   Game.level=1; Game.enemies.length=0; Game.tears.length=0; Game.pickups.length=0; Game.particles.length=0; Game.boss=null; Game.bossBullets.length=0;
   Game.time=0; Game.over=false; Game.paused=false; Game.choosingPerk=false;
@@ -2401,23 +2619,190 @@ function resetIfOver(){ if(!Game.over) return; Game.state='menu'; showStart(); }
     Game.keys[e.key.toLowerCase()] = false;
   }, {capture:true});
 
-  setupPerkOverlay();         // agora seguro
-  setupStartUI();             // 🔧 garantido
-  setupShopUI();
+    setupPerkOverlay();         // agora seguro
+    setupStartUI();             // 🔧 garantido
+    setupShopUI();
 
-  applySavedSkin();
+    applySavedSkin();
 
-  updateWalletUI();
+    updateWalletUI();
 
-  function fit(){ const mar=20, W=Math.max(320,innerWidth-mar), H=Math.max(240,innerHeight-mar-80), s=Math.min(W/Game.w,H/Game.h); c.style.width=(Game.w*s)+'px'; c.style.height=(Game.h*s)+'px'; }
-  addEventListener('resize',fit); fit();
+    function fit(){ const mar=20, W=Math.max(320,innerWidth-mar), H=Math.max(240,innerHeight-mar-80), s=Math.min(W/Game.w,H/Game.h); c.style.width=(Game.w*s)+'px'; c.style.height=(Game.h*s)+'px'; }
+    addEventListener('resize',fit); fit();
 
-  last=performance.now(); requestAnimationFrame(loop);
-})();
+    last=performance.now(); requestAnimationFrame(loop);
+  })();
+
+function exitSecretRoom(){
+  // desliga override e flags
+  Game.perkOverride = null;
+  Game.secret.active = false;
+  Game.secret.done = false;
+
+  // avança pro próximo andar
+  Game.level = Game.secret.nextLevel;
+  buildRoom(Game.level);
+
+  // música normal da fase
+  if (Bgm?.ready) Bgm.play?.('stage');
+
+  // opcional: limpa resíduos
+  Game.enemies.length = 0;
+  Game.tears.length = 0;
+  Game.bossBullets.length = 0;
+  Game.particles.length = 0;
+}
+
+
+function spawnSecretWave(n, prog01){
+  // escala ao longo do tempo (0..1)
+  const hpMul = 1 + (SECRET.hpScaleMax - 1) * prog01;
+  const spdMul = 1 + (SECRET.spdScaleMax - 1) * prog01;
+
+  for (let i=0;i<n;i++){
+    spawnEnemy(true); // usa seu spawn normal
+
+    // pega o último inimigo criado e “bufa”
+    const e = Game.enemies[Game.enemies.length-1];
+    if (!e) continue;
+    e.hp = Math.ceil(e.hp * hpMul);
+    e.hpMax = e.hp;
+    e.speed *= spdMul;
+
+    // se for Gélido e existir escudo, opcionalmente escala também:
+    if (e.shieldMax != null){
+      e.shieldMax = Math.ceil(e.shieldMax * (0.9 + 0.4*prog01));
+      e.shield = e.shieldMax;
+    }
+  }
+}
+
+function resetSecretState({resetStats=false} = {}){
+  Game.secret = Object.assign(Game.secret||{}, {
+    active:false,
+    done:false,
+    timer:0,
+    acc:0,
+    initial:false,
+    nextLevel:0,
+    usedThisLevel:false
+  });
+  Game.perkOverride = null;              // garante que perks voltam ao normal
+  Game.offering = false;
+
+  // limpa marcas na sala corrente
+  if (Game.room){
+    Game.room.isSecret = false;
+    delete Game.room.secretDoor;
+  }
+
+  if (resetStats){
+    // “pity” volta ao zero no início de uma run nova
+    if (Game.stats) Game.stats.roomsSinceSecret = 0;
+  }
+}
+
+
+function updateSecretRoom(dt){
+  if (!(Game.room.isSecret && Game.secret.active)) return; // guarda extra
+  if (Game.choosingPerk) return; // pausa a lógica enquanto a UI está aberta
+
+  const r = Game.room;
+  const t = Game.secret;
+
+  if (!t.initial){
+    // primeira onda (10 inimigos)
+    spawnSecretWave(SECRET.firstWave, 0);
+    t.initial = true;
+  }
+
+  // cronômetro
+  t.timer = Math.max(0, t.timer - dt);
+  t.acc += dt;
+
+  // onda periódica (3–5)
+  while (t.acc >= SECRET.waveEvery && t.timer > 0){
+    t.acc -= SECRET.waveEvery;
+    const n = Math.floor(SECRET.waveMin + Math.random()*(SECRET.waveMax - SECRET.waveMin + 1));
+    const elapsed = (SECRET.duration - t.timer);      // 0..60
+    const prog = Math.min(1, elapsed / SECRET.duration);
+    spawnSecretWave(n, prog);
+  }
+
+  // acabou o tempo → abre a porta de saída (topo)
+  if (t.timer <= 0 && !t.done){
+    t.done = true;
+    r.cleared = true;
+    r.door = { x:Game.w/2-22, y:r.y+10, w:44, h:22, glow:0 };
+    openDoorGap?.();
+    if (Sfx.enabled) Sfx.door?.();
+
+    // 💰 Recompensa imediata de moedas
+    addCoins?.(5000); // usa seus helpers; fallback:
+    if (!addCoins) {
+      const cur = (+localStorage.getItem('coins')||0);
+      localStorage.setItem('coins', cur + 5000);
+    }
+    updateWalletUI?.();
+
+    // ❤️ Dropa 3–5 corações no chão
+    const hearts = 3 + Math.floor(Math.random()*3); // 3..5
+    for (let i=0;i<hearts;i++){
+      Game.pickups.push({
+        type:'heart',
+        x: r.x + r.w/2 - 8 + (Math.random()*60-30),
+        y: r.y + r.h/2 - 8 + (Math.random()*40-20),
+        w: 12, h: 12, vy: -60
+      });
+    }
+
+    // 🧠 Perks: 3 escolhas, 2 lendários garantidos, +50% chance de mítico
+    Game.perkOverride = { minLegendary:2, mythicBoost:0.5 };
+  }
+
+  // 🔴 Tocar a porta de saída da secreta → abrir perks UMA vez
+  if (r.cleared && r.door) {
+    const d = r.door;
+    const hit = aabb(
+      Game.player.x, Game.player.y, Game.player.w, Game.player.h,
+      d.x, d.y, d.w, d.h
+    );                         // ← define 'hit' aqui
+
+    if (hit && !Game.secret.offering) {
+      offerPerksSecret();      // abre a UI só uma vez
+      return;                  // evita repetir neste frame
+    }
+  }
+}
+
+
+function enterSecretRoom(){
+  const next = Game.level + 1;                 // ao sair: vai pro próximo andar
+  Game.secret = { active:true, done:false, timer:SECRET.duration, acc:0, initial:false, nextLevel:next, usedThisLevel:true };
+
+  // Reaproveita build, mas força sala "vazia" tipo boss (sem obstáculos)
+  buildRoom(Game.level);                       // mantém o número do andar
+  Game.room.isSecret = true;
+  Game.room.isBoss = false;
+  Game.room.cleared = false;
+  Game.room.target = 99999;                    // ignorado aqui
+  Game.room.spawned = 0;
+  Game.room.walls = [];                        // sem obstáculos
+
+  Game.enemies.length = 0;
+  Game.boss = null;
+  Game.bossBullets.length = 0;
+  Game.particles.length = 0;
+
+  // música opcional (se tiver faixa 'secret', senão usa 'boss' p/ tensão)
+  if (Bgm?.ready) Bgm.play?.('secret') || Bgm.play?.('boss');
+}
+
 
 /* ---------- Menu Start helpers ---------- */
 
 function enterMenu(){
+  resetSecretState();                    // garante que o menu não herda estado
   Game.state = 'menu';
   Game.paused = false;
   Game.over = false;
@@ -2527,6 +2912,8 @@ function showStart(){
 // }
 
 function hideStart(){
+  resetSecretState({resetStats:true});   // zera qualquer sobra da secreta
+
   const ov = document.getElementById('startOverlay'); if(!ov) return;
 
   // tira foco de filho (evita “preso” no botão)
